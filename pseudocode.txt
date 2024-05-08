@@ -1,0 +1,117 @@
+Recursive sequence:
+
+
+Explain(L(M1), global_target=3):
+  Explain(L(T1), global_target=3):
+    Explain(L(M2), global_target=3):
+      Explain(L(T2), global_target=3):
+        input L = 3 (that which is due to parent causes)
+        input L > L so check CSGs (as something has reduced it):
+          inv(E(CSG5)) == 4 which > input L so is ineffective (4 > 3)
+          inv(E(CSG4)) == 3 which == input L (so is not currently doing anything) and == global_target L (so contributes to the effect)
+            Return: CSG4 @ T2 => L3 from L3 but is "does not let likelihood exceed current value"
+          inv(E(CSG1)) == 2 which < input L (so is doing something) and <= global_target L (so worth mentioning) and < global_target (so is doing more than needed)
+            Return: CSG1 @ T2 => L2 from L3 but "other higher likelihood causes take precedence when determining effects"
+        Explain(L(M3), global_target=3):
+          Explain(L(T4), global_target=3):
+            input L = 5
+            input L > L so check CSGs
+              inv(E(CSG0)) = 3 which < input L (so is doing something) and == global_target (so contributes to the effect)
+                Return: CSG0 @ T4 => L3 from L5
+            Explain(L(M3), global_target=3):
+              Explain(L(R1)):
+                input L = 5 (no causes)
+                input L == L so don't check CSGs
+                no causes
+                  Return: cause is R1
+      Explain(L(T3)):
+        input L = 4
+        input L > L so check CSGs
+          inv(E(CSG2)) == 3 which < input L (so is doing something) and == global_target L (so contributes to the effect)
+            Return: CSG2 @ T3 => L3 from L4
+        Explain(L(M4)):
+          Explain(L(R2)):
+            input L = 2 (no causes)
+            input L == L so don't check CSGs
+            no causes
+              Return: cause is R2
+        Return: cause = R2; CSGs = [CSG2 @ T3 => L3 from L4]
+    Explain(L(M5)):
+      Explain(L(R3)):
+        input L = 5 (no causes)
+        input L < L so check CSGs
+          inv(E(CSG3)) = 4 which < input L (so it doing something) and > global_target (so something else is doing more)
+            Return: CSG3 @ R3 => L4 from L5 but "other lower likelihood causes are also required"
+        no causes:
+          Return: root cause is R3
+        Return: cause = R3; CSGs = [CSG3 @ R3 => L4 from L5 but "other lower likelihood causes are also required"]
+      Explain(L(R4)):
+        Return: cause = R4; CSGs = []
+
+*** need to return the CSG and the root cause linked somehow, but also the root cause in such a way that it can be combined with others downstream ***
+
+
+
+Explain(M, path_set):
+  add M to path_set
+  Find all parent Threats, T
+  for T in parents:
+    if T not in path_set:
+      max_L, root_cause_LE, [CSG objects] = Explain(T, path_set)
+      if max_L < L(M):
+        discard T
+  
+  Combine and return undiscarded parent return values (could be none) =>
+    max(the max_L values)
+    OR(root_cause expressions)
+    List of CSGs @ Ts that have helped with before & after likelihoods and categories?
+      It is really an OR. Just flatten this?!
+
+Explain(T, path_set):
+  add T to path_set
+  Find all parent M, excluding any we have already visited on this path
+  if there are parents:
+    input_L = (min(parent likelihoods))
+  else:
+    # it is an initial cause
+    find all parent TWA and make list of TW_levels
+    input_L = (min(inv(TW_levels)))
+  if input_L > L(T) then for CSG in CSGs:
+    make CSG objects
+  if there are parents then for M in parents:
+    if M not in path_set:
+      max_L, root_cause, [CSG objects] = Explain(M)
+
+  Combine and return the parent return values (could be none) =>
+    min(the max_L values)
+    AND(root_cause expressions)
+    List of CSGs @ Ts that have helped with before & after likelihoods and categories
+
+
+There are five CSG classes:
+    if inv(E(CSG)) > input L:
+        - ineffective (do not report these)
+    else if inv(E(CSG)) == input L:
+        - backstop (would help if something upstream was not there) ("is not reducing likelihood but does not let likelihood exceed current value")
+    else:
+        if inv(E(CSG)) == global_target:
+            - normal
+        else if inv(E(CSG)) < global_target:
+            - over controlled ("other higher likelihood causes take precedence")
+        else:
+            - under controlled ("other lower likelihood causes are also required")
+
+Crucially, we want to report all those where inv(E(CSG)) <= input L, which we can determine without knowing global_target.
+Therefore, we can choose how to report the CSGs at the end of the process.
+=> we need to be able to query E(CSG)
+
+Have a CSG object
+  stores/accesses the info needed to make a line in the report
+    the CSG itself
+      threat it is located at
+      its effectiveness and inverse (i.e. max_L)
+    root_cause LE (of the Threat)
+    MS it is associated with
+    uncontrolled likelihood of the Threat
+  
+  Can I use a memoize() function for caching? (https://docs.python.org/3/library/functools.html#functools.cache)
