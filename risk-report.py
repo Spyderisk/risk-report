@@ -314,7 +314,9 @@ def make_symbol(uriref):
     return symbol(uriref.split('#')[1])
 
 def get_comment_from_match(frag_match):
-    return get_comment(URIRef(SYSTEM + "#" + frag_match.group()[8:-2]))
+    """Converts from e.g. Symbol('MS-LossOfControl-f8b49f60') to the entity's comment"""
+    # TODO: this references a global variable, which is not ideal
+    return my_graph[URIRef(SYSTEM + "#" + frag_match.group()[8:-2])].comment
 
 class LogicalExpression():
     """Represents a Boolean expression using URI fragments as the symbols."""
@@ -364,9 +366,8 @@ class LogicalExpression():
         cause_complexity = str(self.cause.args).count("Symbol")
         if cause_complexity <= max_complexity:
             cause = algebra.dnf(self.cause.simplify())
-            # symb = re.compile(r'Symbol\(\'.*?\'\)')
-            # cause = symb.sub(get_comment_from_match, cause.pretty())
-            cause = cause.pretty()
+            symb = re.compile(r'Symbol\(\'.*?\'\)')
+            cause = symb.sub(get_comment_from_match, cause.pretty())
         else:
             cause = "Complexity: " + str(cause_complexity)
         return cause
@@ -393,26 +394,22 @@ class Graph():
         self.graph = rdf_graph
 
     def __getitem__(self, uriref):
-        if uriref in self.graph:
-            if (uriref, HAS_TYPE, MISBEHAVIOUR_SET) in self.graph:
-                return Misbehaviour(uriref, self)
-            elif (uriref, HAS_TYPE, THREAT) in self.graph:
-                return Threat(uriref, self)
-            elif (uriref, HAS_TYPE, CONTROL_STRATEGY) in self.graph:
-                return ControlStrategy(uriref, self)
-            else:
-                return TrustworthinessAttributeSet(uriref, self)
+        if (uriref, HAS_TYPE, MISBEHAVIOUR_SET) in self.graph:
+            return Misbehaviour(uriref, self.graph)
+        elif (uriref, HAS_TYPE, THREAT) in self.graph:
+            return Threat(uriref, self.graph)
+        elif (uriref, HAS_TYPE, CONTROL_STRATEGY) in self.graph:
+            return ControlStrategy(uriref, self.graph)
+        elif (uriref, HAS_TYPE, TRUSTWORTHINESS_ATTRIBUTE_SET) in self.graph:
+            return TrustworthinessAttributeSet(uriref, self.graph)
         else:
             raise KeyError(uriref)
-
-    def __contains__(self, uriref):
-        return uriref in self.graph
 
     def __len__(self):
         return len(self.graph)
 
     def __str__(self):
-        return "Graph: {} nodes".format(len(self))
+        return "Graph: {} triples".format(len(self))
 
     def __repr__(self):
         return "Graph({})".format(len(self))
@@ -726,30 +723,34 @@ class Threat(Entity):
 
         uncontrolled_inferred_likelihood = min(parent_likelihoods)
 
-        is_primary = False
-        is_undermined = False
+        # is_primary = False
+        # is_undermined = False
 
-        # compute the uncontrolled likelihood based on the asserted TWAS levels
-        twass = self.trustworthiness_attribute_sets
-        if len(twass) > 0:
-            is_primary = True
-            uncontrolled_asserted_likelihood = min([inverse(twa.asserted_level_number) for twa in twass])
+        # # compute the uncontrolled likelihood based on the asserted TWAS levels
+        # twass = self.trustworthiness_attribute_sets
+        # if len(twass) > 0:
+        #     is_primary = True
+        #     uncontrolled_asserted_likelihood = min([inverse(twa.asserted_level_number) for twa in twass])
 
-            # if the uncontrolled inferred likelihood is > uncontrolled asserted likelihood, then the Threat has been indermined by something
-            # in this case then it would be a problem if any of the misbehaviour parents threw an exception
-            is_undermined = uncontrolled_inferred_likelihood > uncontrolled_asserted_likelihood
+        #     # if the uncontrolled inferred likelihood is > uncontrolled asserted likelihood, then the Threat has been undermined by something
+        #     # in this case then it would be a problem if any of the misbehaviour parents threw an exception
+        #     is_undermined = uncontrolled_inferred_likelihood > uncontrolled_asserted_likelihood
 
 
-        if is_primary and not is_undermined:
-            logging.debug("  " * len(current_path) + "Primary Threat with no undermining TWASs (initial cause)")
-            combined_max_likelihood = uncontrolled_inferred_likelihood
+        # if is_primary and not is_undermined:
+        #     logging.debug("  " * len(current_path) + "Primary Threat with no undermining TWASs (initial cause)")
+        #     combined_max_likelihood = uncontrolled_inferred_likelihood
+        #     combined_root_cause = make_symbol(self.uriref)
+        # else:
+
+        # Combine and return parent return values:
+        #     min(the max_L values)
+        #     AND(root_cause expressions)
+        combined_max_likelihood = min([max_likelihood for max_likelihood, _, _ in parent_return_values])  # TODO: should this be min() or max()?
+        combined_root_cause = LogicalExpression([root_cause for _, root_cause, _ in parent_return_values], all_required=True)
+        if combined_root_cause.cause is None:
+            logging.debug("  " * len(current_path) + "Threat is root cause")
             combined_root_cause = make_symbol(self.uriref)
-        else:
-            # Combine and return parent return values:
-            #     min(the max_L values)
-            #     AND(root_cause expressions)
-            combined_max_likelihood = min([max_likelihood for max_likelihood, _, _ in parent_return_values])  # TODO: should this be min() or max()?
-            combined_root_cause = LogicalExpression([root_cause for _, root_cause, _ in parent_return_values], all_required=True)
 
         csg_reports = []
         if uncontrolled_inferred_likelihood > self.likelihood_number:
@@ -759,16 +760,17 @@ class Threat(Entity):
                 logging.debug("  " * len(current_path) + "Candidate Control Strategy: " + csg.description + ", active " + str(csg.is_active) + ", max likelihood: " + str(csg.maximum_likelihood))
                 if csg.maximum_likelihood <= uncontrolled_inferred_likelihood and csg.is_active:
                     # this CSG is effective / at least prevents the likelihood being any higher
+                    logging.debug("  " * len(current_path) + "Control Strategy is effective: " + csg.description)
                     csg_reports.append(ControlStrategyReport(csg, uncontrolled_inferred_likelihood, combined_root_cause))
 
-        if is_primary and not is_undermined:
-            combined_csg_reports = csg_reports
-        else:
-            csg_reports_list = [csg_reports for _, _, csg_reports in parent_return_values]
-            csg_reports_list.append(csg_reports)
-            combined_csg_reports = []
-            for csg_reports in csg_reports_list:
-                combined_csg_reports += csg_reports
+        # if is_primary and not is_undermined:
+        #     combined_csg_reports = csg_reports
+        # else:
+        csg_reports_list = [csg_reports for _, _, csg_reports in parent_return_values]
+        csg_reports_list.append(csg_reports)
+        combined_csg_reports = []
+        for csg_reports in csg_reports_list:
+            combined_csg_reports += csg_reports
         return combined_max_likelihood, combined_root_cause, combined_csg_reports
 
 
@@ -933,7 +935,7 @@ class ControlStrategyReport():
         self.control_strategy = control_strategy
         self.uncontrolled_likelihood = uncontrolled_likelihood
         self.root_cause = root_cause
-        logging.debug(str(self))
+        # logging.debug(str(self))
 
     def __str__(self):
         return "Control Strategy Report:\n  Uncontrolled Likelihood: {}\n  Root Cause: {}\n  {}\n".format(
