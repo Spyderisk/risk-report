@@ -61,7 +61,7 @@ csv_directory = args["csvs"] or  '../domain-network/csv/'
 # output_filename, _, output_format = args["output"].rpartition(".")
 target_ms_ids = args["misbehaviours"] or ['MS-LossOfAvailability-c736a681']  #['MS-LossOfControl-f8b49f60']
 
-SHOW_LIKELIHOOD_IN_DESCRIPTION = True
+SHOW_LIKELIHOOD_IN_DESCRIPTION = False
 
 domain_misbehaviours_filename = Path(csv_directory) / "Misbehaviour.csv"
 domain_trustworthiness_attributes_filename = Path(csv_directory) / "TrustworthinessAttribute.csv"
@@ -70,6 +70,8 @@ domain_controls_filename = Path(csv_directory) / "Control.csv"
 domain_control_strategies_filename = Path(csv_directory) / "ControlStrategy.csv"
 domain_trustworthiness_levels_filename = Path(csv_directory) / "TrustworthinessLevel.csv"
 domain_likelihood_levels_filename = Path(csv_directory) / "Likelihood.csv"
+domain_impact_levels_filename = Path(csv_directory) / "ImpactLevel.csv"
+domain_risk_lookup_filename = Path(csv_directory) / "RiskLookupTable.csv"
 
 # Constants to query RDF:
 CORE = "http://it-innovation.soton.ac.uk/ontologies/trustworthiness/core"
@@ -223,6 +225,27 @@ def load_domain_levels(filename):
             tw[uri]["label"] = row[label_index]
     return tw
 
+def load_risk_lookup(filename):
+    """Load the risk lookup matrix"""
+    risk = {}
+    with open(filename, newline="") as csvfile:
+        reader = csv.reader(csvfile)
+        header = next(reader)
+        iv_index = header.index("IV")
+        lv_index = header.index("LV")
+        rv_index = header.index("RV")
+        for row in reader:
+            if DUMMY_URI in row: continue
+            for i in range(1, len(row)):
+                iv = int(row[iv_index])
+                lv = int(row[lv_index])
+                rv = int(row[rv_index])
+                if iv not in risk:
+                    risk[iv] = { lv: rv }
+                else:
+                    risk[iv][lv] = rv
+    return risk
+
 def un_camel_case(text):
     text = text.strip()
     if text == "": return "****"
@@ -238,32 +261,6 @@ def un_camel_case(text):
         text = re.sub('([A-Z]{2,})([A-Z][a-z])', r'\1 \2', text)  # split out e.g. "PIN" or "ID" as a separate word
         text = text.replace('BIO S', 'BIOS ')  # one label is "BIOSatHost"
         return text
-
-def get_comment(uriref):
-    if (uriref, HAS_TYPE, MISBEHAVIOUR_SET) in graph:
-        return get_ms_comment(uriref)
-    elif (uriref, HAS_TYPE, CONTROL_SET) in graph:
-        return get_cs_comment(uriref)
-    elif (get_is_threat(uriref)):
-        return get_threat_comment(uriref)
-    elif DUMMY_CSG in str(uriref):
-        return get_csg_comment(uriref)
-
-    if str(uriref).startswith("http://"):
-        label = graph.label(subject=uriref, default=None)
-
-        if label is not None:
-            return label
-
-        if str(uriref).startswith(CORE):
-            label = "core" + str(uriref)[len(CORE):]
-        elif str(uriref).startswith(DOMAIN):
-            label = "domain" + str(uriref)[len(DOMAIN):]
-
-    else:
-        label = str(uriref)
-
-    return label
 
 def get_twas_description(uriref):
     """Return a long description of a TWAS"""
@@ -750,7 +747,7 @@ class Threat(Entity):
         combined_root_cause = LogicalExpression([root_cause for _, root_cause, _ in parent_return_values], all_required=True)
         if combined_root_cause.cause is None:
             logging.debug("  " * len(current_path) + "Threat is root cause")
-            combined_root_cause = make_symbol(self.uriref)
+            combined_root_cause = LogicalExpression([make_symbol(self.uriref)])
 
         csg_reports = []
         if uncontrolled_inferred_likelihood > self.likelihood_number:
@@ -784,6 +781,9 @@ class Misbehaviour(Entity):
 
     def _likelihood_uriref(self):
         return self.graph.value(self.uriref, HAS_PRIOR)
+
+    def _impact_uriref(self):
+        return self.graph.value(self.uriref, HAS_IMPACT)
 
     def _domain_model_uriref(self):
         return self.graph.value(self.uriref, HAS_MISBEHAVIOUR)
@@ -845,9 +845,13 @@ class Misbehaviour(Entity):
         return dm_likelihood_levels[self._likelihood_uriref().split('/')[-1]]["label"]
 
     @property
-    def impact_text(self):
-        return get_impact_text(self.uriref)
-    
+    def impact_number(self):
+        return dm_impact_levels[self._impact_uriref().split('/')[-1]]["number"]
+
+    @property
+    def impact_label(self):
+        return dm_impact_levels[self._impact_uriref().split('/')[-1]]["label"]
+
     @property
     def risk_text(self):
         return get_risk_text(self.uriref)
@@ -935,12 +939,38 @@ class ControlStrategyReport():
         self.control_strategy = control_strategy
         self.uncontrolled_likelihood = uncontrolled_likelihood
         self.root_cause = root_cause
-        # logging.debug(str(self))
+        self.misbehaviour = None
 
     def __str__(self):
         return "Control Strategy Report:\n  Uncontrolled Likelihood: {}\n  Root Cause: {}\n  {}\n".format(
             self.uncontrolled_likelihood, str(self.root_cause), str(self.control_strategy))
 
+    def comment(self):
+        if self.control_strategy.maximum_likelihood == self.uncontrolled_likelihood:
+            # back-stop: something upstream has brought likelihood down and this brings it down to the same level
+            return "This is not itself reducing the likelihood but does not let the likelihood exceed the current value"
+        else:
+            if self.control_strategy.maximum_likelihood == self.misbehaviour.likelihood_number:
+                # this CSG is the one that brings the likelihood down
+                return "This is the cause of the reduction in likelihood"
+            elif self.control_strategy.maximum_likelihood < self.misbehaviour.likelihood_number:
+                # does more than needed, but something else brings likelihood up
+                return "Other higher likelihood causes take precedence"
+            else:
+                # under controlled
+                return "Other lower likelihood causes are also required"
+   
+    @classmethod
+    def cvs_header(cls):
+        return ["Root Cause", "Intermediate Cause", "Consequence", 
+                "Likelihood", "impact", "Risk", 
+                "Control", "Residual Likelihood", "Residual Risk", "Comment"]
+
+    def csv_row(self):
+        return [self.root_cause.pretty_print(), self.control_strategy.threat.comment, self.misbehaviour.comment,
+                self.uncontrolled_likelihood, self.misbehaviour.impact_label, dm_risk_lookup[self.misbehaviour.impact_number][self.uncontrolled_likelihood],
+                self.control_strategy.description, self.control_strategy.maximum_likelihood, dm_risk_lookup[self.misbehaviour.impact_number][self.control_strategy.maximum_likelihood]]
+    
 class Timer():
     def __init__(self):
         self.stime = time.perf_counter()
@@ -1000,17 +1030,6 @@ def get_misbehaviour_direct_cause_uris(misb_uri):
         direct_cause_uris.append(threat)
     return direct_cause_uris
 
-def get_impact_text(uriref):
-    return un_camel_case(_get_impact(uriref))
-
-def _get_impact(uriref):
-    try:
-        level = graph.value(uriref, HAS_IMPACT)
-        # level is e.g. http://it-innovation.soton.ac.uk/ontologies/trustworthiness/domain#ImpactLevelMedium
-        return str(level).split('#')[-1][11:]
-    except:
-        return "None"
-
 def get_risk_text(uriref):
     return un_camel_case(_get_risk(uriref))
 
@@ -1033,9 +1052,6 @@ def _get_trustworthiness(uriref):
     except:
         return "None"
 
-def get_is_control_strategy(uriref):
-    return ((uriref, BLOCKS, None) in graph) or ((uriref, MITIGATES, None) in graph)
-
 def get_is_normal_op(uriref):
     """Return Boolean describing if the uriref refers to a normal operation threat or misbehaviour"""
     if get_is_threat(uriref):
@@ -1046,10 +1062,6 @@ def get_is_normal_op(uriref):
 def get_is_root_cause(uriref):
     """Return Boolean describing if the uriref refers to a root cause threat"""
     return (uriref, IS_ROOT_CAUSE, Literal(True)) in graph
-
-def get_is_threat(uriref):
-    """Return Boolean describing if the uriref refers to a primary OR secondary threat"""
-    return (uriref, HAS_TYPE, THREAT) in graph
 
 def get_is_secondary_threat(uriref):
     """Return Boolean describing if the uriref refers to a secondary threat"""
@@ -1064,10 +1076,6 @@ def get_is_primary_threat(uriref):
 def get_is_external_cause(uriref):
     """Return Boolean describing if the uriref refers to an external cause misbehaviour"""
     return (uriref, IS_EXTERNAL_CAUSE, Literal(True)) in graph
-
-def get_is_misbehaviour_set(uriref):
-    """Return Boolean describing if the uriref refers to a misbehaviour set"""
-    return (uriref, HAS_TYPE, MISBEHAVIOUR_SET) in graph
 
 def get_is_misbehaviour_on_asserted_asset(ms_uriref):
     """Return Boolean describing if the uriref refers to a misbehaviour located at an asserted asset"""
@@ -1131,12 +1139,12 @@ def unzip_gz_file(filename):
     except Exception as e:
         logging.error(f"Error while unzipping: {e}")
 
+# TODO: make a domain model class to hold this data
+
 def inverse(level):
     """Convert between trustworthiness and likelihood levels"""
     # TODO: the "5" should not be hard-coded here
     return 5 - level
-
-# TODO: make a domain model class to hold this data
 
 logging.info("Loading domain model misbehaviours...")
 dm_misbehaviours = load_domain_misbehaviours(domain_misbehaviours_filename)
@@ -1156,6 +1164,10 @@ dm_ca_settings = load_domain_ca_settings(domain_ca_settings_filename)
 logging.info("Loading domain model levels...")
 dm_likelihood_levels = load_domain_levels(domain_likelihood_levels_filename)
 dm_trustworthiness_levels = load_domain_levels(domain_trustworthiness_levels_filename)
+dm_impact_levels = load_domain_levels(domain_impact_levels_filename)
+
+logging.info("Loading risk lookup table...")
+dm_risk_lookup = load_risk_lookup(domain_risk_lookup_filename)
 
 nq_filename = unzip_gz_file(nq_filename)
 graph = ConjunctiveGraph()
@@ -1167,12 +1179,16 @@ print(len(my_graph))
 timer.log()
 
 
-target_ms_uris = [URIRef(SYSTEM + "#" + target_ms_id) for target_ms_id in target_ms_ids]
+target_ms = [Misbehaviour(URIRef(SYSTEM + "#" + target_ms_id), graph) for target_ms_id in target_ms_ids]
 
-for ms in target_ms_uris:
-    max_likelihood, root_cause, csgrs = Misbehaviour(ms, graph).explain_likelihood()
+all_csg_reports = []
 
-print("max_likelihood: ", max_likelihood)
-print("root_cause: ", root_cause)
-for csgr in csgrs:
-    print(csgr)
+for ms in target_ms:
+    max_likelihood, root_cause, csg_reports = ms.explain_likelihood()
+    for csg_report in csg_reports:
+        csg_report.misbehaviour = ms
+    all_csg_reports += csg_reports
+
+print(ControlStrategyReport.cvs_header())
+for csg_report in all_csg_reports:
+    print(csg_report.csv_row())
