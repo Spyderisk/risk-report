@@ -21,15 +21,16 @@
 # <!-- SPDX-FileComment: Original by Stephen Phillips, May 2024 -->
 
 import argparse
+import copy
 import csv
 import gzip
 import logging
 import re
 import tempfile
 import time
+from functools import cache, cached_property
 from itertools import chain
 from pathlib import Path
-from functools import cache, cached_property
 
 import boolean
 # from graphviz import Digraph
@@ -40,14 +41,14 @@ VERSION = "1.0"
 algebra = boolean.BooleanAlgebra()
 TRUE, FALSE, NOT, AND, OR, symbol = algebra.definition()
 
-logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
+logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
 
 parser = argparse.ArgumentParser(description="Generate risk reports for Spyderisk system models",
                                  epilog="e.g. risk-report.py -i SteelMill.nq.gz -o steel.pdf -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60")
 parser.add_argument("-i", "--input", dest="input", required=False, metavar="input_NQ_filename", help="Filename of the validated system model NQ file (compressed or not)")
 # parser.add_argument("-o", "--output", dest="output", required=True, metavar="output_image_filename", help="Output filename (PDF, SVG or PNG)")
 parser.add_argument("-d", "--domain", dest="csvs", required=False, metavar="CSV_directory", help="Directory containing the domain model CSV files")
-parser.add_argument("-m", "--misbehaviour", dest="misbehaviours", required=False, nargs="+", metavar="URI_fragment", help="Target misbehaviour IDs, e.g. 'MS-LossOfControl-f8b49f60'")
+# parser.add_argument("-m", "--misbehaviour", dest="misbehaviours", required=False, nargs="+", metavar="URI_fragment", help="Target misbehaviour IDs, e.g. 'MS-LossOfControl-f8b49f60'")
 parser.add_argument("--version", action="version", version="%(prog)s " + VERSION)
 
 raw = parser.parse_args()
@@ -56,11 +57,11 @@ args = vars(raw)
 # TODO: remove the defaults and make the arguments required
 # nq_filename = args["input"] or './example-models/small 2024-05-08T14_32.nq.gz'
 # csv_directory = args["csvs"] or  '../domain-network/csv/'
-# target_ms_ids = args["misbehaviours"] or ['MS-LossOfAvailability-c736a681']
+# # target_ms_ids = args["misbehaviours"] or ['MS-LossOfAvailability-c736a681']
 
 nq_filename = args["input"] or './example-models/Steel Mill 2 blocks+ 2023-11-06T15_04.nq.gz'
 csv_directory = args["csvs"] or  '../domain-network/csv/'
-target_ms_ids = args["misbehaviours"] or ['MS-LossOfControl-f8b49f60']
+# target_ms_ids = args["misbehaviours"] or ['MS-LossOfControl-f8b49f60']
 
 # output_filename, _, output_format = args["output"].rpartition(".")
 
@@ -74,6 +75,7 @@ domain_control_strategies_filename = Path(csv_directory) / "ControlStrategy.csv"
 domain_trustworthiness_levels_filename = Path(csv_directory) / "TrustworthinessLevel.csv"
 domain_likelihood_levels_filename = Path(csv_directory) / "Likelihood.csv"
 domain_impact_levels_filename = Path(csv_directory) / "ImpactLevel.csv"
+domain_risk_levels_filename = Path(csv_directory) / "RiskLevel.csv"
 domain_risk_lookup_filename = Path(csv_directory) / "RiskLookupTable.csv"
 
 # Constants to query RDF:
@@ -212,7 +214,7 @@ def load_domain_ca_settings(filename):
     return settings
 
 def load_domain_levels(filename):
-    """Load levels from the domain model (works for trustworthiness and likelihood)"""
+    """Load levels from the domain model (works for impact, risk, trustworthiness and likelihood)"""
     tw = {}
     with open(filename, newline="") as csvfile:
         reader = csv.reader(csvfile)
@@ -401,7 +403,7 @@ class Graph(ConjunctiveGraph):
 
     def get_entity(self, uriref):
         if (uriref, HAS_TYPE, MISBEHAVIOUR_SET) in self:
-            return Misbehaviour(uriref, self)
+            return MisbehaviourSet(uriref, self)
         elif (uriref, HAS_TYPE, THREAT) in self:
             return Threat(uriref, self)
         elif (uriref, HAS_TYPE, CONTROL_STRATEGY) in self:
@@ -417,7 +419,7 @@ class Graph(ConjunctiveGraph):
 
     @cache
     def misbehaviour(self, uriref):
-        return Misbehaviour(uriref, self)
+        return MisbehaviourSet(uriref, self)
 
     @cache
     def control_strategy(self, uriref):
@@ -429,19 +431,19 @@ class Graph(ConjunctiveGraph):
 
     @property
     def threats(self):
-        return [self.threat(uriref, self) for uriref in self.subjects(HAS_TYPE, THREAT)]
+        return [self.threat(uriref) for uriref in self.subjects(HAS_TYPE, THREAT)]
 
     @property
     def misbehaviours(self):
-        return [self.misbehaviour(uriref, self) for uriref in self.subjects(HAS_TYPE, MISBEHAVIOUR_SET)]
+        return [self.misbehaviour(uriref) for uriref in self.subjects(HAS_TYPE, MISBEHAVIOUR_SET)]
 
     @property
     def control_strategies(self):
-        return [self.control_strategy(uriref, self) for uriref in self.subjects(HAS_TYPE, CONTROL_STRATEGY)]
+        return [self.control_strategy(uriref) for uriref in self.subjects(HAS_TYPE, CONTROL_STRATEGY)]
 
     @property
     def trustworthiness_attribute_sets(self):
-        return [self.trustworthiness_attribute_set(uriref, self) for uriref in self.subjects(HAS_TYPE, TRUSTWORTHINESS_ATTRIBUTE_SET)]
+        return [self.trustworthiness_attribute_set(uriref) for uriref in self.subjects(HAS_TYPE, TRUSTWORTHINESS_ATTRIBUTE_SET)]
 
     def label(self, uriref):
         return self.value(subject=uriref, predicate=HAS_LABEL)
@@ -824,8 +826,8 @@ class Threat(Entity):
         }
 
 
-class Misbehaviour(Entity):
-    """Represents a Misbehaviour."""
+class MisbehaviourSet(Entity):
+    """Represents a Misbehaviour Set, or "Consequence" (a Misbehaviour at an Asset)."""
     def __init__(self, uriref, graph):
         super().__init__(uriref, graph)
         self.likelihood_explanations = []
@@ -838,6 +840,9 @@ class Misbehaviour(Entity):
 
     def _impact_uriref(self):
         return self.graph.value(self.uriref, HAS_IMPACT)
+
+    def _risk_uriref(self):
+        return self.graph.value(self.uriref, HAS_RISK)
 
     def _domain_model_uriref(self):
         return self.graph.value(self.uriref, HAS_MISBEHAVIOUR)
@@ -907,32 +912,16 @@ class Misbehaviour(Entity):
         return dm_impact_levels[self._impact_uriref().split('/')[-1]]["label"]
 
     @property
-    def risk_text(self):
-        return get_risk_text(self.uriref)
+    def risk_number(self):
+        return dm_risk_levels[self._risk_uriref().split('/')[-1]]["number"]
+
+    @property
+    def risk_label(self):
+        return dm_risk_levels[self._risk_uriref().split('/')[-1]]["label"]
 
     @property
     def is_normal_op(self):
         return get_is_normal_op(self.uriref)
-
-    @property
-    def is_root_cause(self):
-        return get_is_root_cause(self.uriref)
-
-    @property
-    def is_secondary_threat(self):
-        return get_is_secondary_threat(self.uriref)
-
-    @property
-    def is_primary_threat(self):
-        return get_is_primary_threat(self.uriref)
-
-    @property
-    def is_external_cause(self):
-        return get_is_external_cause(self.uriref)
-
-    @property
-    def is_initial_cause(self):
-        return get_is_initial_cause(self.uriref)
 
     @property
     def threat_parents(self):
@@ -1219,6 +1208,7 @@ logging.info("Loading domain model levels...")
 dm_likelihood_levels = load_domain_levels(domain_likelihood_levels_filename)
 dm_trustworthiness_levels = load_domain_levels(domain_trustworthiness_levels_filename)
 dm_impact_levels = load_domain_levels(domain_impact_levels_filename)
+dm_risk_levels = load_domain_levels(domain_risk_levels_filename)
 
 logging.info("Loading risk lookup table...")
 dm_risk_lookup = load_risk_lookup(domain_risk_lookup_filename)
@@ -1233,21 +1223,38 @@ print(len(my_graph))
 timer.log()
 
 
-target_ms = [my_graph.misbehaviour(URIRef(SYSTEM + "#" + target_ms_id)) for target_ms_id in target_ms_ids]
+# target_ms = [my_graph.misbehaviour(URIRef(SYSTEM + "#" + target_ms_id)) for target_ms_id in target_ms_ids]
+
+target_ms = set()
+
+logging.info("High impact consequences:")
+for ms in my_graph.misbehaviours:
+    if ms.impact_number > 3:
+        logging.info(ms.comment)
+        target_ms.add(ms)
+
+logging.info("High risk consequences:")
+for ms in my_graph.misbehaviours:
+    if ms.risk_number > 3:
+        logging.info(ms.comment)
+        target_ms.add(ms)
 
 all_csg_reports = set()
 
 # TODO: could stop the search when all CSG-Threat pairs have been found?
 
-# TODO: this is not going to work for multiple MS
-# We need to make a copy of the csg_reports held on the cached Threat objects so that we can use them for different MS
 for ms in target_ms:
     explanation = ms.explain_likelihood()
     timer.log()
     for csg_report in explanation["csg_reports"]:
-        csg_report.misbehaviour = ms
-    all_csg_reports |= explanation["csg_reports"]
+        csg_report_copy = copy.copy(csg_report)
+        csg_report_copy.misbehaviour = ms
+        all_csg_reports.add(csg_report_copy)
 
-print(ControlStrategyReport.cvs_header())
-for csg_report in all_csg_reports:
-    print(csg_report.csv_row())
+with open('output.csv', 'w', newline='') as file:
+    writer = csv.writer(file)
+    # Write the header
+    writer.writerow(ControlStrategyReport.cvs_header())
+    # Write each row
+    for csg_report in all_csg_reports:
+        writer.writerow(csg_report.csv_row())
