@@ -41,7 +41,7 @@ VERSION = "1.0"
 algebra = boolean.BooleanAlgebra()
 TRUE, FALSE, NOT, AND, OR, symbol = algebra.definition()
 
-logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
+logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 
 parser = argparse.ArgumentParser(description="Generate risk reports for Spyderisk system models",
                                  epilog="e.g. risk-report.py -i SteelMill.nq.gz -o steel.pdf -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60")
@@ -390,7 +390,7 @@ class TreeTraversalError(Exception):
     def __str__(self) -> str:
         return f"Error encountered during tree traversal. Loopback nodes: {self.loopback_node_uris}"
 
-# TODO: should this extend the rdf_graph type?
+# TODO: Add the domain model as a parameter? And load from NQ rather than CSV files?
 class Graph(ConjunctiveGraph):
     """Represents the system model as an RDF graph."""
     def __init__(self, nq_filename):
@@ -463,7 +463,7 @@ class ControlStrategy(Entity):
 
     def __str__(self):
         return "Control Strategy: {}\n  Description: {}\n  Effectiveness: {}\n  Max Likelihood: {}\n  Blocks:\n{}\n".format(
-            str(self.uriref), self.description, str(self.effectiveness_number), str(self.maximum_likelihood), str(self.threat))
+            str(self.uriref), self.description, str(self.effectiveness_number), str(self.maximum_likelihood), str(self.blocked_threats))
 
     @property
     def description(self):
@@ -501,15 +501,8 @@ class ControlStrategy(Entity):
         return dm_control_strategies[self._domain_model_uriref().split('/')[-1]]["futureRisk"]
 
     @cached_property
-    def threat(self):
-        threat_uriref = self.graph.value(self.uriref, BLOCKS)
-        if threat_uriref is None:
-            # MITIGATES is a legacy predicate and is not used in newer domain models
-            threat_uriref = self.graph.value(self.uriref, MITIGATES)
-            if threat_uriref is None:
-                # the Threat does not block anything, so it must just trigger something
-                return None
-        return self.graph.threat(threat_uriref)
+    def blocked_threats(self):        
+        return [self.graph.threat(threat_uriref) for threat_uriref in self.graph.value(self.uriref, BLOCKS)]
 
     @property
     def is_active(self):
@@ -813,7 +806,7 @@ class Threat(Entity):
                 if csg.maximum_likelihood <= uncontrolled_inferred_likelihood and csg.is_active:
                     # this CSG is effective / at least prevents the likelihood being any higher
                     logging.debug("  " * len(current_path) + "Control Strategy is effective: " + csg.description)
-                    csg_reports.add(ControlStrategyReport(csg, uncontrolled_inferred_likelihood, combined_root_cause))
+                    csg_reports.add(ControlStrategyReport(csg, uncontrolled_inferred_likelihood, combined_root_cause, self))
 
         combined_csg_reports = set().union(*[ret["csg_reports"] for ret in parent_return_values])
         combined_csg_reports |= csg_reports
@@ -925,8 +918,9 @@ class MisbehaviourSet(Entity):
 
     @property
     def threat_parents(self):
-        """Get all the Threats that can cause this Misbehaviour (disregarding likelihoods)"""
-        return [self.graph.threat(t) for t in self.graph.subjects(CAUSES_MISBEHAVIOUR, self.uriref)]
+        """Get all the Threats that can cause this Misbehaviour (disregarding likelihoods and untriggered Threats)"""
+        threats = [self.graph.threat(t) for t in self.graph.subjects(CAUSES_MISBEHAVIOUR, self.uriref)]
+        return [threat for threat in threats if threat.likelihood_number >= 0]  # likelihood is set to -1 for untriggered threats
 
     #TODO: move this method onto a special subclass of a more general Threat class
     def explain_likelihood(self, current_path=None):
@@ -1024,26 +1018,28 @@ class MisbehaviourSet(Entity):
     
 class ControlStrategyReport():
     """Represents a Control Strategy Report."""
-    def __init__(self, control_strategy, uncontrolled_likelihood, root_cause):
+    def __init__(self, control_strategy, uncontrolled_likelihood, root_cause, intermediate_cause):
         self.control_strategy = control_strategy
         self.uncontrolled_likelihood = uncontrolled_likelihood
         self.root_cause = root_cause
+        self.intermediate_cause = intermediate_cause
         self.misbehaviour = None
 
     def __str__(self):
-        return "Control Strategy Report:\n  Uncontrolled Likelihood: {}\n  Root Cause: {}\n  {}\n".format(
-            self.uncontrolled_likelihood, str(self.root_cause), str(self.control_strategy))
+        return "Control Strategy Report:\n  Uncontrolled Likelihood: {}\n  Root Cause: {}\n  Intermediate Cause: {}\n  Control Strategy: {}".format(
+            self.uncontrolled_likelihood, str(self.root_cause), str(self.intermediate_cause), str(self.control_strategy))
 
     def __hash__(self):
-        return hash((self.control_strategy, self.uncontrolled_likelihood, self.root_cause))
+        return hash((self.control_strategy, self.uncontrolled_likelihood, self.root_cause, self.intermediate_cause, self.misbehaviour))
 
     def __eq__(self, other):
         if not isinstance(other, ControlStrategyReport):
             return False
         return (self.control_strategy == other.control_strategy and
-                self.control_strategy == other.control_strategy and
                 self.uncontrolled_likelihood == other.uncontrolled_likelihood and
-                self.root_cause == other.root_cause)
+                self.root_cause == other.root_cause and
+                self.intermediate_cause == other.intermediate_cause and
+                self.misbehaviour == other.misbehaviour)
 
     def comment(self):
         if self.control_strategy.maximum_likelihood == self.uncontrolled_likelihood:
@@ -1067,9 +1063,13 @@ class ControlStrategyReport():
                 "Control", "Residual Likelihood", "Residual Risk", "Comment"]
 
     def csv_row(self):
-        return [self.root_cause.pretty_print(), self.control_strategy.threat.comment, self.misbehaviour.comment,
+        intermediate = self.intermediate_cause.comment
+        if self.root_cause.pretty_print() == self.intermediate_cause.comment:
+            intermediate = ""
+        return [self.root_cause.pretty_print(), intermediate, self.misbehaviour.comment,
                 self.uncontrolled_likelihood, self.misbehaviour.impact_number, dm_risk_lookup[self.misbehaviour.impact_number][self.uncontrolled_likelihood],
-                self.control_strategy.description, self.control_strategy.maximum_likelihood, dm_risk_lookup[self.misbehaviour.impact_number][self.control_strategy.maximum_likelihood]]
+                self.control_strategy.description, self.control_strategy.maximum_likelihood, dm_risk_lookup[self.misbehaviour.impact_number][self.control_strategy.maximum_likelihood],
+                self.comment()]
 
 class Timer():
     def __init__(self):
@@ -1243,6 +1243,7 @@ all_csg_reports = set()
 
 # TODO: could stop the search when all CSG-Threat pairs have been found?
 
+logging.info("Computing explanations...")
 for ms in target_ms:
     explanation = ms.explain_likelihood()
     timer.log()
