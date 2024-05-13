@@ -29,7 +29,7 @@ import tempfile
 import time
 from itertools import chain
 from pathlib import Path
-from functools import cache
+from functools import cache, cached_property
 
 import boolean
 # from graphviz import Digraph
@@ -54,13 +54,13 @@ raw = parser.parse_args()
 args = vars(raw)
 
 # TODO: remove the defaults and make the arguments required
-nq_filename = args["input"] or './example-models/small 2024-05-08T14_32.nq.gz'
-csv_directory = args["csvs"] or  '../domain-network/csv/'
-target_ms_ids = args["misbehaviours"] or ['MS-LossOfAvailability-c736a681']
-
-# nq_filename = args["input"] or '../validation case/Steel Mill 2 blocks+ 2023-11-06T15_04.nq.gz'
+# nq_filename = args["input"] or './example-models/small 2024-05-08T14_32.nq.gz'
 # csv_directory = args["csvs"] or  '../domain-network/csv/'
-# target_ms_ids = args["misbehaviours"] or ['MS-LossOfControl-f8b49f60']
+# target_ms_ids = args["misbehaviours"] or ['MS-LossOfAvailability-c736a681']
+
+nq_filename = args["input"] or './example-models/Steel Mill 2 blocks+ 2023-11-06T15_04.nq.gz'
+csv_directory = args["csvs"] or  '../domain-network/csv/'
+target_ms_ids = args["misbehaviours"] or ['MS-LossOfControl-f8b49f60']
 
 # output_filename, _, output_format = args["output"].rpartition(".")
 
@@ -498,7 +498,7 @@ class ControlStrategy(Entity):
     def is_future_risk_csg(self):
         return dm_control_strategies[self._domain_model_uriref().split('/')[-1]]["futureRisk"]
 
-    @property
+    @cached_property
     def threat(self):
         threat_uriref = self.graph.value(self.uriref, BLOCKS)
         if threat_uriref is None:
@@ -802,7 +802,7 @@ class Threat(Entity):
         combined_loopback_node_uris = set().union(*[ret["loopback_node_uris"] for ret in parent_return_values])
         combined_loopback_node_uris.discard(self.uriref)
 
-        csg_reports = []
+        csg_reports = set()
         if uncontrolled_inferred_likelihood > self.likelihood_number:
             # some CSG(s) at this Threat have made a difference
             # make the CSG objects
@@ -811,13 +811,10 @@ class Threat(Entity):
                 if csg.maximum_likelihood <= uncontrolled_inferred_likelihood and csg.is_active:
                     # this CSG is effective / at least prevents the likelihood being any higher
                     logging.debug("  " * len(current_path) + "Control Strategy is effective: " + csg.description)
-                    csg_reports.append(ControlStrategyReport(csg, uncontrolled_inferred_likelihood, combined_root_cause))
+                    csg_reports.add(ControlStrategyReport(csg, uncontrolled_inferred_likelihood, combined_root_cause))
 
-        csg_reports_list = [ret["csg_reports"] for ret in parent_return_values]
-        csg_reports_list.append(csg_reports)
-        combined_csg_reports = []
-        for csg_reports in csg_reports_list:
-            combined_csg_reports += csg_reports
+        combined_csg_reports = set().union(*[ret["csg_reports"] for ret in parent_return_values])
+        combined_csg_reports |= csg_reports
         return {
             "max_likelihood": combined_max_likelihood,
             "root_cause": combined_root_cause,
@@ -1022,8 +1019,7 @@ class Misbehaviour(Entity):
         #       It is really an OR. Just flatten this?!
         combined_max_likelihood = max([ret["max_likelihood"] for ret in parent_return_values])
         combined_root_cause = LogicalExpression([ret["root_cause"] for ret in parent_return_values], all_required=False)
-        csg_reports_list = [ret["csg_reports"] for ret in parent_return_values]
-        combined_csg_reports = [item for sublist in csg_reports_list for item in sublist]  # flatten the list of lists
+        combined_csg_reports = set().union(*[ret["csg_reports"] for ret in parent_return_values])
         combined_cause_node_uris = set().union(*[ret["cause_node_uris"] for ret in parent_return_values])
         combined_cause_node_uris.add(self.uriref)
         combined_loopback_node_uris = set().union(*[ret["loopback_node_uris"] for ret in parent_return_values])
@@ -1048,6 +1044,17 @@ class ControlStrategyReport():
     def __str__(self):
         return "Control Strategy Report:\n  Uncontrolled Likelihood: {}\n  Root Cause: {}\n  {}\n".format(
             self.uncontrolled_likelihood, str(self.root_cause), str(self.control_strategy))
+
+    def __hash__(self):
+        return hash((self.control_strategy, self.uncontrolled_likelihood, self.root_cause))
+
+    def __eq__(self, other):
+        if not isinstance(other, ControlStrategyReport):
+            return False
+        return (self.control_strategy == other.control_strategy and
+                self.control_strategy == other.control_strategy and
+                self.uncontrolled_likelihood == other.uncontrolled_likelihood and
+                self.root_cause == other.root_cause)
 
     def comment(self):
         if self.control_strategy.maximum_likelihood == self.uncontrolled_likelihood:
@@ -1228,14 +1235,18 @@ timer.log()
 
 target_ms = [my_graph.misbehaviour(URIRef(SYSTEM + "#" + target_ms_id)) for target_ms_id in target_ms_ids]
 
-all_csg_reports = []
+all_csg_reports = set()
 
+# TODO: could stop the search when all CSG-Threat pairs have been found?
+
+# TODO: this is not going to work for multiple MS
+# We need to make a copy of the csg_reports held on the cached Threat objects so that we can use them for different MS
 for ms in target_ms:
     explanation = ms.explain_likelihood()
     timer.log()
     for csg_report in explanation["csg_reports"]:
         csg_report.misbehaviour = ms
-    all_csg_reports += explanation["csg_reports"]
+    all_csg_reports |= explanation["csg_reports"]
 
 print(ControlStrategyReport.cvs_header())
 for csg_report in all_csg_reports:
