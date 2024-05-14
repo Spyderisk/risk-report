@@ -46,7 +46,7 @@ logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 parser = argparse.ArgumentParser(description="Generate risk reports for Spyderisk system models",
                                  epilog="e.g. risk-report.py -i SteelMill.nq.gz -o steel.pdf -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60")
 parser.add_argument("-i", "--input", dest="input", required=False, metavar="input_NQ_filename", help="Filename of the validated system model NQ file (compressed or not)")
-# parser.add_argument("-o", "--output", dest="output", required=True, metavar="output_image_filename", help="Output filename (PDF, SVG or PNG)")
+parser.add_argument("-o", "--output", dest="output", required=False, metavar="output_csv_filename", help="Output CSV filename")
 parser.add_argument("-d", "--domain", dest="csvs", required=False, metavar="CSV_directory", help="Directory containing the domain model CSV files")
 # parser.add_argument("-m", "--misbehaviour", dest="misbehaviours", required=False, nargs="+", metavar="URI_fragment", help="Target misbehaviour IDs, e.g. 'MS-LossOfControl-f8b49f60'")
 parser.add_argument("--version", action="version", version="%(prog)s " + VERSION)
@@ -63,7 +63,7 @@ nq_filename = args["input"] or './example-models/Steel Mill 2 blocks+ 2023-11-06
 csv_directory = args["csvs"] or  '../domain-network/csv/'
 # target_ms_ids = args["misbehaviours"] or ['MS-LossOfControl-f8b49f60']
 
-# output_filename, _, output_format = args["output"].rpartition(".")
+output_filename = args["output"] or 'output.csv'
 
 SHOW_LIKELIHOOD_IN_DESCRIPTION = False
 
@@ -122,12 +122,13 @@ IS_INITIAL_CAUSE = URIRef(CORE + "#isInitialCause")
 IS_NORMAL_OP = URIRef(CORE + "#isNormalOp")
 IS_NORMAL_OP_EFFECT = URIRef(CORE + "#isNormalOpEffect")
 PARENT = URIRef(CORE + "#parent")
-DUMMY_CSG = "dummy-csg"
-DEFAULT_TW_ATTRIBUTE = URIRef(DOMAIN + "#DefaultTW")
-IN_SERVICE = URIRef(DOMAIN + "#InService")
-INFINITY = 99999999
 CONTROL_STRATEGY = URIRef(CORE + "#ControlStrategy")
 TRUSTWORTHINESS_ATTRIBUTE_SET = URIRef(CORE + "#TrustworthinessAttributeSet")
+INFINITY = 99999999
+
+# WARNING: Domain model specific predicates
+DEFAULT_TW_ATTRIBUTE = URIRef(DOMAIN + "#DefaultTW")
+IN_SERVICE = URIRef(DOMAIN + "#InService")
 
 # The second line of a CSV file often contains default values and if so will include domain#000000
 DUMMY_URI = "domain#000000"
@@ -143,9 +144,10 @@ def load_domain_misbehaviours(filename):
         comment_index = header.index("comment")
         for row in reader:
             if DUMMY_URI in row: continue
-            misbehaviour[row[uri_index]] = {}
-            misbehaviour[row[uri_index]]["label"] = row[label_index]
-            misbehaviour[row[uri_index]]["description"] = row[comment_index]
+            uri = row[uri_index]
+            misbehaviour[uri] = {}
+            misbehaviour[uri]["label"] = row[label_index]
+            misbehaviour[uri]["description"] = row[comment_index]
     return misbehaviour
 
 def load_domain_trustworthiness_attributes(filename):
@@ -159,9 +161,10 @@ def load_domain_trustworthiness_attributes(filename):
         comment_index = header.index("comment")
         for row in reader:
             if DUMMY_URI in row: continue
-            ta[row[uri_index]] = {}
-            ta[row[uri_index]]["label"] = row[label_index]
-            ta[row[uri_index]]["description"] = row[comment_index]
+            uri = row[uri_index]
+            ta[uri] = {}
+            ta[uri]["label"] = row[label_index]
+            ta[uri]["description"] = row[comment_index]
     return ta
 
 def load_domain_controls(filename):
@@ -174,8 +177,9 @@ def load_domain_controls(filename):
         label_index = header.index("label")
         for row in reader:
             if DUMMY_URI in row: continue
-            control[row[uri_index]] = {}
-            control[row[uri_index]]["label"] = row[label_index]
+            uri = row[uri_index]
+            control[uri] = {}
+            control[uri]["label"] = row[label_index]
     return control
 
 def load_domain_control_strategies(filename):
@@ -241,14 +245,13 @@ def load_risk_lookup(filename):
         rv_index = header.index("RV")
         for row in reader:
             if DUMMY_URI in row: continue
-            for i in range(1, len(row)):
-                iv = int(row[iv_index])
-                lv = int(row[lv_index])
-                rv = int(row[rv_index])
-                if iv not in risk:
-                    risk[iv] = { lv: rv }
-                else:
-                    risk[iv][lv] = rv
+            iv = int(row[iv_index])
+            lv = int(row[lv_index])
+            rv = int(row[rv_index])
+            if iv not in risk:
+                risk[iv] = { lv: rv }
+            else:
+                risk[iv][lv] = rv
     return risk
 
 def un_camel_case(text):
@@ -267,42 +270,6 @@ def un_camel_case(text):
         text = text.replace('BIO S', 'BIOS ')  # one label is "BIOSatHost"
         return text
 
-def get_twas_description(uriref):
-    """Return a long description of a TWAS"""
-    twa = rdf_graph.value(uriref, HAS_TWA)
-    try:
-        return dm_trustworthiness_attributes[twa.split('/')[-1]]["description"]
-    except:
-        # might get here if the domain model CSVs are the wrong ones
-        logging.warning("No TWAS description for " + str(uriref))
-        return "**TWAS description**"
-
-def get_twas_comment(uriref):
-    """Return a short description of a TWAS"""
-    tw_level = un_camel_case(get_trustworthiness_text(uriref))
-    twa = get_twas_label(uriref)
-    asset_uri = rdf_graph.value(subject=uriref, predicate=LOCATED_AT)
-    asset = rdf_graph.label(asset_uri)
-    return '{} of {} is {}'.format(un_camel_case(twa), asset, tw_level)
-
-def get_twas_label(uriref):
-    """Return a TWAS label"""
-    twa = rdf_graph.value(uriref, HAS_TWA)
-    try:
-        return dm_trustworthiness_attributes[twa.split('/')[-1]]["label"]
-    except:
-        # might get here if the domain model CSVs are the wrong ones
-        logging.warning("No TWAS label for " + str(uriref))
-        return "**TWAS label**"
-
-def get_cs_comment(cs_uri):
-    control_uri = rdf_graph.value(cs_uri, HAS_CONTROL)
-    control_label = un_camel_case(dm_controls[control_uri.split('/')[-1]]["label"])
-    asset_uri = rdf_graph.value(cs_uri, LOCATED_AT)
-    asset_label = rdf_graph.value(asset_uri, HAS_LABEL)
-    if asset_label[0] != "[": asset_label = '"' + asset_label + '"'
-    return control_label + " at " + asset_label
-
 def abbreviate_asset_label(label):
     if label.startswith("[ClientServiceChannel:"):
         # Example input:
@@ -318,7 +285,7 @@ def make_symbol(uriref):
 def get_comment_from_match(frag_match):
     """Converts from e.g. Symbol('MS-LossOfControl-f8b49f60') to the entity's comment"""
     # TODO: this references a global variable, which is not ideal
-    return my_graph.get_entity(URIRef(SYSTEM + "#" + frag_match.group()[8:-2])).comment
+    return system_model.get_entity(URIRef(SYSTEM + "#" + frag_match.group()[8:-2])).comment
 
 class LogicalExpression():
     """Represents a Boolean expression using URI fragments as the symbols."""
@@ -537,39 +504,68 @@ class TrustworthinessAttributeSet(Entity):
         return "Trustworthiness Attribute Set: {}\n  Label: {}\n  Description: {}\n".format(
             str(self.uriref), self.label, self.description)
 
+    def _twa_uriref(self):
+        return self.graph.value(self.uriref, HAS_TWA).split('/')[-1]
+
+    def _inferred_tw_level_uriref(self):
+        uriref = self.graph.value(self.uriref, HAS_INFERRED_LEVEL)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
+
     @property
     def label(self):
-        return get_twas_label(self.uriref)
+        """Return a TWAS label"""
+        try:
+            return dm_trustworthiness_attributes[self._twa_uriref()]["label"]
+        except KeyError:
+            # might get here if the domain model CSVs are the wrong ones
+            logging.warning("No TWAS label for " + str(self.uriref))
+            return "**TWAS label**"
 
     @property
     def comment(self):
-        return get_twas_comment(self.uriref)
+        """Return a short description of a TWAS"""
+        tw_level = self.get_inferred_level_label
+        twa = self.label
+        asset_uriref = self.graph.value(subject=self.uriref, predicate=LOCATED_AT)
+        asset = self.graph.label(asset_uriref)
+        return '{} of {} is {}'.format(un_camel_case(twa), asset, tw_level)
 
     @property
     def description(self):
-        return get_twas_description(self.uriref)
-
-    def _inferred_tw_level_uriref(self):
-        return self.graph.value(self.uriref, HAS_INFERRED_LEVEL)
+        """Return a long description of a TWAS"""
+        try:
+            return dm_trustworthiness_attributes[self._twa_uriref()]["description"]
+        except KeyError:
+            # might get here if the domain model CSVs are the wrong ones
+            logging.warning("No TWAS description for " + str(self.uriref))
+            return "**TWAS description**"
 
     @property
     def inferred_level_number(self):
-        return dm_trustworthiness_levels[self._inferred_tw_level_uriref().split('/')[-1]]["number"]
+        return dm_trustworthiness_levels[self._inferred_tw_level_uriref()]["number"]
 
     @property
     def inferred_level_label(self):
-        return dm_trustworthiness_levels[self._inferred_tw_level_uriref().split('/')[-1]]["label"]
+        return dm_trustworthiness_levels[self._inferred_tw_level_uriref()]["label"]
 
     def _asserted_tw_level_uriref(self):
         return self.graph.value(self.uriref, HAS_ASSERTED_LEVEL)
 
     @property
     def asserted_level_number(self):
-        return dm_trustworthiness_levels[self._asserted_tw_level_uriref().split('/')[-1]]["number"]
+        return dm_trustworthiness_levels[self._asserted_tw_level_uriref()]["number"]
 
     @property
     def inferred_level_label(self):
-        return dm_trustworthiness_levels[self._asserted_tw_level_uriref().split('/')[-1]]["label"]
+        return dm_trustworthiness_levels[self._asserted_tw_level_uriref()]["label"]
+
+    # TODO: this uses a domain-specific predicate. Don't incorporate it into a general class
+    @property
+    def is_default_tw(self):
+        """Return Boolean describing whether this is a TWAS which has the Default TW attribute"""
+        return (self.uriref, HAS_TWA, DEFAULT_TW_ATTRIBUTE) in self.graph
 
 class Threat(Entity):
     """Represents a Threat."""
@@ -580,8 +576,17 @@ class Threat(Entity):
     def __str__(self):
         return "Threat: {} ({})".format(self.comment, str(self.uriref))
 
-    def _likelihood_uriref(self):
-        return self.graph.value(self.uriref, HAS_PRIOR)
+    def _likelihood_uri(self):
+        uriref = self.graph.value(self.uriref, HAS_PRIOR)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
+
+    def _risk_uri(self):
+        uriref = self.graph.value(self.uriref, HAS_RISK)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
 
     def _get_threat_comment(self):
         """Return the first part of the threat description (up to the colon)"""
@@ -618,43 +623,47 @@ class Threat(Entity):
 
     @property
     def likelihood_number(self):
-        if self._likelihood_uriref() is None:
+        if self._likelihood_uri() is None:
             return -1
-        return dm_likelihood_levels[self._likelihood_uriref().split('/')[-1]]["number"]
+        return dm_likelihood_levels[self._likelihood_uri()]["number"]
 
     @property
     def likelihood_label(self):
-        if self._likelihood_uriref() is None:
+        if self._likelihood_uri() is None:
             return "N/A"
-        return dm_likelihood_levels[self._likelihood_uriref().split('/')[-1]]["label"]
+        return dm_likelihood_levels[self._likelihood_uri()]["label"]
 
     @property
-    def impact_text(self):
-        return get_impact_text(self.uriref)
+    def risk_number(self):
+        if self._risk_uri() is None:
+            return -1
+        return dm_risk_levels[self._risk_uri()]["number"]
 
     @property
-    def risk_text(self):
-        return get_risk_text(self.uriref)
+    def risk_label(self):
+        if self._risk_uri() is None:
+            return "N/A"
+        return dm_risk_levels[self._risk_uri()]["label"]
 
     @property
     def is_normal_op(self):
-        return get_is_normal_op(self.uriref)
+        return (self.uriref, IS_NORMAL_OP, Literal(True)) in self.graph
 
     @property
     def is_root_cause(self):
-        return get_is_root_cause(self.uriref)
+        return (self.uriref, IS_ROOT_CAUSE, Literal(True)) in self.graph
 
     @property
     def is_secondary_threat(self):
-        return get_is_secondary_threat(self.uriref)
+        return (self.uriref, HAS_SECONDARY_EFFECT_CONDITION, None) in self.graph
 
     @property
     def is_primary_threat(self):
-        return get_is_primary_threat(self.uriref)
+        return (self.uriref, HAS_ENTRY_POINT, None) in self.graph
 
     @property
     def is_external_cause(self):
-        return get_is_external_cause(self.uriref)
+        return (self.uriref, IS_EXTERNAL_CAUSE, Literal(True)) in self.graph
 
     @property
     def is_initial_cause(self):
@@ -788,9 +797,8 @@ class Threat(Entity):
         #     union of all loopback_node_uris sets from  parent_return_values
         #       also removing self from the set to ensure the return value describes just the tree starting at self
 
-        combined_max_likelihood = min([ret["max_likelihood"] for ret in parent_return_values])  # TODO: should this be min() or max()?
+        combined_max_likelihood = min([ret["max_likelihood"] for ret in parent_return_values])  # TODO: check this again!
         combined_max_likelihood = max(combined_max_likelihood, uncontrolled_inferred_likelihood)
-        # combined_max_likelihood = uncontrolled_inferred_likelihood
         combined_root_cause = LogicalExpression([ret["root_cause"] for ret in parent_return_values], all_required=True)
         if combined_root_cause.cause is None:
             logging.debug("  " * len(current_path) + "Threat is root cause")
@@ -835,22 +843,34 @@ class MisbehaviourSet(Entity):
         return "Misbehaviour: {} ({})".format(self.comment, str(self.uriref))
 
     def _likelihood_uriref(self):
-        return self.graph.value(self.uriref, HAS_PRIOR)
+        uriref = self.graph.value(self.uriref, HAS_PRIOR)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
 
     def _impact_uriref(self):
-        return self.graph.value(self.uriref, HAS_IMPACT)
+        uriref = self.graph.value(self.uriref, HAS_IMPACT)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
 
     def _risk_uriref(self):
-        return self.graph.value(self.uriref, HAS_RISK)
+        uriref = self.graph.value(self.uriref, HAS_RISK)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
 
     def _domain_model_uriref(self):
-        return self.graph.value(self.uriref, HAS_MISBEHAVIOUR)
+        uriref = self.graph.value(self.uriref, HAS_MISBEHAVIOUR)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
 
     @property
     def label(self):
         """Return a misbehaviour label"""
         try:
-            return dm_misbehaviours[self._domain_model_uriref().split('/')[-1]]["label"]
+            return dm_misbehaviours[self._domain_model_uriref()]["label"]
         except KeyError:
             # might get here if the domain model CSVs are the wrong ones
             logging.warning("No MS label for " + str(self.uriref))
@@ -888,7 +908,7 @@ class MisbehaviourSet(Entity):
     def description(self):
         """Return a long description of a misbehaviour"""
         try:
-            return dm_misbehaviours[self._domain_model_uriref().split('/')[-1]]["description"]
+            return dm_misbehaviours[self._domain_model_uriref()]["description"]
         except KeyError:
             # might get here if the domain model CSVs are the wrong ones
             logging.warning("No MS description for " + str(self.uriref))
@@ -896,31 +916,31 @@ class MisbehaviourSet(Entity):
 
     @property
     def likelihood_number(self):
-        return dm_likelihood_levels[self._likelihood_uriref().split('/')[-1]]["number"]
+        return dm_likelihood_levels[self._likelihood_uriref()]["number"]
 
     @property
     def likelihood_label(self):
-        return dm_likelihood_levels[self._likelihood_uriref().split('/')[-1]]["label"]
+        return dm_likelihood_levels[self._likelihood_uriref()]["label"]
 
     @property
     def impact_number(self):
-        return dm_impact_levels[self._impact_uriref().split('/')[-1]]["number"]
+        return dm_impact_levels[self._impact_uriref()]["number"]
 
     @property
     def impact_label(self):
-        return dm_impact_levels[self._impact_uriref().split('/')[-1]]["label"]
+        return dm_impact_levels[self._impact_uriref()]["label"]
 
     @property
     def risk_number(self):
-        return dm_risk_levels[self._risk_uriref().split('/')[-1]]["number"]
+        return dm_risk_levels[self._risk_uriref()]["number"]
 
     @property
     def risk_label(self):
-        return dm_risk_levels[self._risk_uriref().split('/')[-1]]["label"]
+        return dm_risk_levels[self._risk_uriref()]["label"]
 
     @property
     def is_normal_op(self):
-        return get_is_normal_op(self.uriref)
+        return (self.uriref, IS_NORMAL_OP_EFFECT, Literal(True)) in self.graph
 
     @property
     def threat_parents(self):
@@ -1090,6 +1110,10 @@ class Timer():
         self.stime = time.perf_counter()
 
 
+#
+# TODO: This block of code needs to be incorporated into the Entity subclasses or deleted
+#
+
 def get_threat_direct_cause_uris(threat_uri):
     """Return a list of urirefs which are the direct causes (misbehaviours) of a threat"""
     direct_cause_uris = []
@@ -1103,31 +1127,6 @@ def get_misbehaviour_direct_cause_uris(misb_uri):
     for threat in rdf_graph.subjects(CAUSES_DIRECT_MISBEHAVIOUR, misb_uri):
         direct_cause_uris.append(threat)
     return direct_cause_uris
-
-def get_is_normal_op(uriref):
-    """Return Boolean describing if the uriref refers to a normal operation threat or misbehaviour"""
-    if get_is_threat(uriref):
-        return (uriref, IS_NORMAL_OP, Literal(True)) in rdf_graph
-    else:
-        return (uriref, IS_NORMAL_OP_EFFECT, Literal(True)) in rdf_graph
-
-def get_is_root_cause(uriref):
-    """Return Boolean describing if the uriref refers to a root cause threat"""
-    return (uriref, IS_ROOT_CAUSE, Literal(True)) in rdf_graph
-
-def get_is_secondary_threat(uriref):
-    """Return Boolean describing if the uriref refers to a secondary threat"""
-    # TODO: some threats now have mixed causes, does this, or the use of this need to change?
-    return (uriref, HAS_SECONDARY_EFFECT_CONDITION, None) in rdf_graph  # tests if there is a triple (threat, has_secondary_effect_condition, <anything>)
-
-def get_is_primary_threat(uriref):
-    """Return Boolean describing if the uriref refers to a primary threat"""
-    # TODO: some threats now have mixed causes, does this, or the use of this need to change?
-    return get_is_threat(uriref) and not get_is_secondary_threat(uriref)
-
-def get_is_external_cause(uriref):
-    """Return Boolean describing if the uriref refers to an external cause misbehaviour"""
-    return (uriref, IS_EXTERNAL_CAUSE, Literal(True)) in rdf_graph
 
 def get_is_misbehaviour_on_asserted_asset(ms_uriref):
     """Return Boolean describing if the uriref refers to a misbehaviour located at an asserted asset"""
@@ -1146,10 +1145,6 @@ def get_is_asserted_asset(asset_uriref):
         if type.startswith(DOMAIN):
             return True
     return False
-
-def get_is_default_tw(twas_uriref):
-    """Return Boolean describing whether the uriref refers to a TWAS which has the Default TW attribute"""
-    return (twas_uriref, HAS_TWA, DEFAULT_TW_ATTRIBUTE) in rdf_graph
 
 def get_is_in_service(threat_uriref):
     for cause_uriref in rdf_graph.subjects(CAUSES_THREAT, threat_uriref):
@@ -1170,6 +1165,19 @@ def get_threat_involved_asset_uris(threat_uriref):
             for asset in rdf_graph.objects(node, HAS_ASSET):
                 assets.append(asset)
     return assets
+
+def get_cs_comment(cs_uri):
+    control_uri = rdf_graph.value(cs_uri, HAS_CONTROL)
+    control_label = un_camel_case(dm_controls[control_uri.split('/')[-1]]["label"])
+    asset_uri = rdf_graph.value(cs_uri, LOCATED_AT)
+    asset_label = rdf_graph.value(asset_uri, HAS_LABEL)
+    if asset_label[0] != "[": asset_label = '"' + asset_label + '"'
+    return control_label + " at " + asset_label
+
+#
+# end block
+#
+
 
 def unzip_gz_file(filename):
     if not filename.lower().endswith('.gz'):
@@ -1222,29 +1230,25 @@ dm_risk_levels = load_domain_levels(domain_risk_levels_filename)
 logging.info("Loading risk lookup table...")
 dm_risk_lookup = load_risk_lookup(domain_risk_lookup_filename)
 
-# nq_filename = unzip_gz_file(nq_filename)
-# rdf_graph = ConjunctiveGraph()
 logging.info("Loading nq file...")
 timer = Timer()
-# rdf_graph.parse(nq_filename, format="nquads")
-my_graph = Graph(nq_filename)
-print(len(my_graph))
+system_model = Graph(nq_filename)
+print(len(system_model))
 timer.log()
 
 
-
-# target_ms = [my_graph.misbehaviour(URIRef(SYSTEM + "#" + target_ms_id)) for target_ms_id in target_ms_ids]
+# TODO: if CLI option target_ms is set then use that, otherwise get the high impact & high risk ones as below
 
 target_ms = set()
 
 logging.info("High impact consequences:")
-for ms in my_graph.misbehaviours:
+for ms in system_model.misbehaviours:
     if ms.impact_number > 3:
         logging.info(ms.comment)
         target_ms.add(ms)
 
 logging.info("High risk consequences:")
-for ms in my_graph.misbehaviours:
+for ms in system_model.misbehaviours:
     if ms.risk_number > 3:
         logging.info(ms.comment)
         target_ms.add(ms)
@@ -1262,10 +1266,13 @@ for ms in target_ms:
         csg_report_copy.misbehaviour = ms
         all_csg_reports.add(csg_report_copy)
 
-with open('output.csv', 'w', newline='') as file:
+with open(output_filename, 'w', newline='') as file:
     writer = csv.writer(file)
     # Write the header
     writer.writerow(ControlStrategyReport.cvs_header())
     # Write each row
     for csg_report in all_csg_reports:
         writer.writerow(csg_report.csv_row())
+
+# TODO: include root causes that are not controlled at all on their path to the MS
+# TODO: do we want the root causes to be normal_ops (as-is) or adverse threats?
