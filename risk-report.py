@@ -279,7 +279,7 @@ def abbreviate_asset_label(label):
     return label
 
 def make_symbol(uriref):
-    """Make a symbol from the URI fragment for us in logical expressions"""
+    """Make a symbol from the URIRef for use in logical expressions"""
     return symbol(uriref.split('#')[1])
 
 def get_comment_from_match(frag_match):
@@ -507,6 +507,12 @@ class TrustworthinessAttributeSet(Entity):
     def _twa_uriref(self):
         return self.graph.value(self.uriref, HAS_TWA).split('/')[-1]
 
+    def _asserted_tw_level_uriref(self):
+        uriref = self.graph.value(self.uriref, HAS_ASSERTED_LEVEL)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
+
     def _inferred_tw_level_uriref(self):
         uriref = self.graph.value(self.uriref, HAS_INFERRED_LEVEL)
         if uriref is None:
@@ -550,9 +556,6 @@ class TrustworthinessAttributeSet(Entity):
     def inferred_level_label(self):
         return dm_trustworthiness_levels[self._inferred_tw_level_uriref()]["label"]
 
-    def _asserted_tw_level_uriref(self):
-        return self.graph.value(self.uriref, HAS_ASSERTED_LEVEL)
-
     @property
     def asserted_level_number(self):
         return dm_trustworthiness_levels[self._asserted_tw_level_uriref()]["number"]
@@ -560,6 +563,10 @@ class TrustworthinessAttributeSet(Entity):
     @property
     def inferred_level_label(self):
         return dm_trustworthiness_levels[self._asserted_tw_level_uriref()]["label"]
+
+    @property
+    def is_external_cause(self):
+        return (self.uriref, IS_EXTERNAL_CAUSE, Literal(True)) in self.graph
 
     # TODO: this uses a domain-specific predicate. Don't incorporate it into a general class
     @property
@@ -662,12 +669,8 @@ class Threat(Entity):
         return (self.uriref, HAS_ENTRY_POINT, None) in self.graph
 
     @property
-    def is_external_cause(self):
-        return (self.uriref, IS_EXTERNAL_CAUSE, Literal(True)) in self.graph
-
-    @property
     def is_initial_cause(self):
-        """Return Boolean describing if the uriref refers to an initial cause threat"""
+        """Return Boolean describing if the Threat is an 'initial cause'"""
         return (self.uriref, IS_INITIAL_CAUSE, Literal(True)) in self.graph
 
     @property
@@ -734,6 +737,13 @@ class Threat(Entity):
         current_path = set(current_path)
         current_path.add(self.uriref)
 
+        # A Threat is an "initial cause" if all the TrustworthinessAttributeSets that cause it are "external causes" and it is a normal-op.
+        #  The isInitialCause predicate is different.
+        # A Threat is a "root cause" if it is not a normal-op (it is an "adverse" threat), it has TWAS, it would not be undermined by the maximum likelihood of its parent causes.
+        #  The isRootCause predicate cannot be used for this because its placement depends on the likelihood calculation and this analysis is considering what happens without some CSGs so we cannot use this.
+        # TODO: check and clarify lines above
+        # A Threat is an "intermediate cause" if there is an effective control strategy at it. These threats are set as attributes of the ControlStrategyReports
+
         # Examine all parent Misbehaviours (of both primary and secondary Threats) that are not already in the current path
         # Put the returned tuples in parent_return_values
         # A Threat needs all causes to be on good paths
@@ -750,10 +760,10 @@ class Threat(Entity):
         parent_likelihoods = []
 
         # To compute the inferred_uncontrolled_likelihood:
-        # For a primary threat it's the entry-point TWASs' inferred values we need to look at
-        # Where there is a TWAS, don't consider the likelihood of the MS that caused it (via a TWIS) as it might be the asserted TW level that is the problem
-        # For a secondary threat it's the likelihood of the causal misbehaviour
-        # Need to take into account mixed cause threats as well
+        #   For a primary threat it's the entry-point TWASs' inferred values we need to look at.
+        #     The inferred TWAS levels will have taken into account the asserted levels and the inferred likelihoods of the causing misbehaviours.
+        #   For a secondary threat it's the likelihood of the causal misbehaviour.
+        #   We need to take into account that threats can have mixed causes (so can be both "primary" and "secondary").
 
         inferred_twas_levels = [twas.inferred_level_number for twas in self.trustworthiness_attribute_sets]
         parent_likelihoods = [inverse(level) for level in inferred_twas_levels]
@@ -762,47 +772,43 @@ class Threat(Entity):
         parent_likelihoods += [ms.likelihood_number for ms in self.secondary_threat_misbehaviour_parents]
         logging.debug("  " * len(current_path) + "All parent likehoods: " + str(parent_likelihoods))
 
-        # if len(parent_likelihoods) == 0:
-        #     # secondary Threat & there were no parent Misbehaviours that were not already in the current path
-        #     logging.debug("  " * len(current_path) + "Secondary Threat with no parent Misbehaviours not on current path")
-        #     raise TreeTraversalError()
-
         uncontrolled_inferred_likelihood = min(parent_likelihoods)
 
-        # is_primary = False
-        # is_undermined = False
-
-        # # compute the uncontrolled likelihood based on the asserted TWAS levels
-        # twass = self.trustworthiness_attribute_sets
-        # if len(twass) > 0:
-        #     is_primary = True
-        #     uncontrolled_asserted_likelihood = min([inverse(twa.asserted_level_number) for twa in twass])
-
-        #     # if the uncontrolled inferred likelihood is > uncontrolled asserted likelihood, then the Threat has been undermined by something
-        #     # in this case then it would be a problem if any of the misbehaviour parents threw an exception
-        #     is_undermined = uncontrolled_inferred_likelihood > uncontrolled_asserted_likelihood
-
-
-        # if is_primary and not is_undermined:
-        #     logging.debug("  " * len(current_path) + "Primary Threat with no undermining TWASs (initial cause)")
-        #     combined_max_likelihood = uncontrolled_inferred_likelihood
-        #     combined_root_cause = make_symbol(self.uriref)
-        # else:
-
         # Combine and return parent return values:
-        #     min(the max_L values)
-        #     AND(root_cause expressions)
+        #     min(the max_likelihood values) combined with the uncontrolled_inferred_likelihood
+        #     AND(root_cause expressions) or self if self is root_cause
+        #     AND(initial_cause expressions) or self if self is initial_cause
         #     union of all cause_node_uris sets
         #       also adding self to the set
-        #     union of all loopback_node_uris sets from  parent_return_values
+        #     union of all loopback_node_uris sets
         #       also removing self from the set to ensure the return value describes just the tree starting at self
 
-        combined_max_likelihood = min([ret["max_likelihood"] for ret in parent_return_values])  # TODO: check this again!
-        combined_max_likelihood = max(combined_max_likelihood, uncontrolled_inferred_likelihood)
-        combined_root_cause = LogicalExpression([ret["root_cause"] for ret in parent_return_values], all_required=True)
-        if combined_root_cause.cause is None:
+        combined_parent_likelihood = min([ret["max_likelihood"] for ret in parent_return_values])  # TODO: check this again!
+        combined_max_likelihood = max(combined_parent_likelihood, uncontrolled_inferred_likelihood)
+
+        parents_are_normal_op = all([ret["is_normal_op"] for ret in parent_return_values])  # are all parents normal_ops?
+
+        asserted_twas_levels = [twas.asserted_level_number for twas in self.trustworthiness_attribute_sets]
+        if len(asserted_twas_levels):
+            asserted_likelihood = min([inverse(level) for level in asserted_twas_levels])
+
+        # We need a different root cause definition to the predicate
+        is_root_cause = len(asserted_twas_levels) and combined_max_likelihood == asserted_likelihood and not self.is_normal_op
+        if is_root_cause:
             logging.debug("  " * len(current_path) + "Threat is root cause")
             combined_root_cause = LogicalExpression([make_symbol(self.uriref)])
+        else:            
+            combined_root_cause = LogicalExpression([ret["root_cause"] for ret in parent_return_values], all_required=True)
+
+        combined_is_normal_op = parents_are_normal_op and self.is_normal_op  # parents + self (to return)
+
+        # We need a slightly different initial cause definition to the meaning of the predicate
+        if all([twas.is_external_cause for twas in self.trustworthiness_attribute_sets]) and self.is_normal_op:
+            logging.debug("  " * len(current_path) + "Threat is initial cause: " + str(self))
+            combined_initial_cause = LogicalExpression([make_symbol(self.uriref)])
+        else:
+            combined_initial_cause = LogicalExpression([ret["initial_cause"] for ret in parent_return_values], all_required=True)
+
         combined_cause_node_uris = set().union(*[ret["cause_node_uris"] for ret in parent_return_values])
         combined_cause_node_uris.add(self.uriref)
         combined_loopback_node_uris = set().union(*[ret["loopback_node_uris"] for ret in parent_return_values])
@@ -810,23 +816,28 @@ class Threat(Entity):
 
         csg_reports = set()
         if uncontrolled_inferred_likelihood > self.likelihood_number:
-            # some CSG(s) at this Threat have made a difference
-            # make the CSG objects
+            # Some CSG(s) at this Threat have made a difference to the likelihood.
+            # Make the CSG Report objects.
+            # Note: the effective CSG could be on a normal_op Threat
             for csg in self.control_strategies:
                 logging.debug("  " * len(current_path) + "Candidate Control Strategy: " + csg.description + ", active " + str(csg.is_active) + ", max likelihood: " + str(csg.maximum_likelihood))
                 if csg.maximum_likelihood <= uncontrolled_inferred_likelihood and csg.is_active:
                     # this CSG is effective / at least prevents the likelihood being any higher
                     logging.debug("  " * len(current_path) + "Control Strategy is effective: " + str(csg))
-                    csg_report = ControlStrategyReport(csg, uncontrolled_inferred_likelihood, combined_root_cause, self)
+                    csg_report = ControlStrategyReport(
+                        control_strategy=csg, uncontrolled_likelihood=uncontrolled_inferred_likelihood, 
+                        initial_cause=combined_initial_cause, root_cause=combined_root_cause, intermediate_cause=self)
                     csg_reports.add(csg_report)
                     logging.debug("  " * len(current_path) + str(csg_report))
 
         combined_csg_reports = set().union(*[ret["csg_reports"] for ret in parent_return_values])
         combined_csg_reports |= csg_reports
-        logging.debug("  " * len(current_path) + "max_likelihood: " + str(combined_max_likelihood) + " / csg_reports: " + str(len(combined_csg_reports)) + " / cause_node_uris: " + str(len(combined_cause_node_uris)) + " / loopback_node_uris: " + str(len(combined_loopback_node_uris)))
+        logging.debug("  " * len(current_path) + "max_likelihood: " + str(combined_max_likelihood) + " / csg_reports: " + str(len(combined_csg_reports)) + " / cause_node_uris: " + str(len(combined_cause_node_uris)) + " / loopback_node_uris: " + str(len(combined_loopback_node_uris)) + " / normal_op: " + str(combined_is_normal_op))
         return {
             "max_likelihood": combined_max_likelihood,
             "root_cause": combined_root_cause,
+            "is_normal_op": combined_is_normal_op,  # TODO: this attribute is not actually used for anything so should be removed
+            "initial_cause": combined_initial_cause,
             "csg_reports": combined_csg_reports,
             "cause_node_uris": combined_cause_node_uris,
             "loopback_node_uris": combined_loopback_node_uris
@@ -983,6 +994,10 @@ class MisbehaviourSet(Entity):
         current_path = set(current_path)
         current_path.add(self.uriref)
 
+        # A MisbehaviourSet can be at the top of the tree for two reasons:
+        # 1. there is no Threat in the domain model which undermines it (e.g. "In Service" MS)
+        # 2. there is a Threat in the domain model which undermines it but the Threat is not the system model
+
         # list to hold the parent return values
         parent_return_values = []
 
@@ -1009,11 +1024,14 @@ class MisbehaviourSet(Entity):
         if len(parent_return_values) == 0:
             # there were no parents (or none that we had not already visited), so nothing is causing this Misbehaviour
             # raise TreeTraversalError()
-            logging.debug("  " * len(current_path) + "Misbehaviour has no cause")
-            # Use "None" as root_cause: this is picked up in Threat.explain() and the Threat is then used as the root cause
+            logging.debug("  " * len(current_path) + "Misbehaviour is at the top of the tree: " + str(self))
+            # Use "None" as initial_cause: this is picked up in Threat.explain() and the Threat is then used as the initial cause
+            logging.debug("  " * len(current_path) + "max_likelihood: " + str(self.likelihood_number) + " / csg_reports: 0" + " / cause_node_uris: 1" + " / loopback_node_uris: 0" + " / normal_op: " + str(self.is_normal_op))
             return {
                 "max_likelihood": self.likelihood_number, 
-                "root_cause": None, 
+                "root_cause": None,
+                "is_normal_op": self.is_normal_op,
+                "initial_cause": None,
                 "csg_reports": [],
                 "cause_node_uris": set([self.uriref]),
                 "loopback_node_uris": set()
@@ -1022,24 +1040,31 @@ class MisbehaviourSet(Entity):
         # Combine and return undiscarded parent return values (could be none) =>
         #     max(the max_L values)
         #     OR(root_cause expressions)
+        #     OR(initial_cause expressions)
         #     union of all cause_node_uris sets
         #       also adding self to the set
         #     union of all loopback_node_uris sets from both parent_return_values (good) and loopback_node_uri_sets (errors)
         #       also removing self from the set to ensure the return value describes just the tree starting at self
         #     list of csg_reports
         #       It is really an OR. Just flatten this?!
+        #     union of loopback_nodes (removing self if it's in there)
+        #     true if all of the parents were normal_ops and self is normal_op
         combined_max_likelihood = max([ret["max_likelihood"] for ret in parent_return_values])
         combined_root_cause = LogicalExpression([ret["root_cause"] for ret in parent_return_values], all_required=False)
+        combined_initial_cause = LogicalExpression([ret["initial_cause"] for ret in parent_return_values], all_required=False)
         combined_csg_reports = set().union(*[ret["csg_reports"] for ret in parent_return_values])
         combined_cause_node_uris = set().union(*[ret["cause_node_uris"] for ret in parent_return_values])
         combined_cause_node_uris.add(self.uriref)
         combined_loopback_node_uris = set().union(*[ret["loopback_node_uris"] for ret in parent_return_values])
         combined_loopback_node_uris |= set().union(*loopback_node_uri_sets)
         combined_loopback_node_uris.discard(self.uriref)
-        logging.debug("  " * len(current_path) + "max_likelihood: " + str(combined_max_likelihood) + " / csg_reports: " + str(len(combined_csg_reports)) + " / cause_node_uris: " + str(len(combined_cause_node_uris)) + " / loopback_node_uris: " + str(len(combined_loopback_node_uris)))
+        combined_is_normal_op = all([ret["is_normal_op"] for ret in parent_return_values]) and self.is_normal_op
+        logging.debug("  " * len(current_path) + "max_likelihood: " + str(combined_max_likelihood) + " / csg_reports: " + str(len(combined_csg_reports)) + " / cause_node_uris: " + str(len(combined_cause_node_uris)) + " / loopback_node_uris: " + str(len(combined_loopback_node_uris)) + " / normal_op: " + str(combined_is_normal_op))
         return {
             "max_likelihood": combined_max_likelihood,
             "root_cause": combined_root_cause,
+            "is_normal_op": combined_is_normal_op,
+            "initial_cause": combined_initial_cause,
             "csg_reports": combined_csg_reports,
             "cause_node_uris": combined_cause_node_uris,
             "loopback_node_uris": combined_loopback_node_uris
@@ -1047,16 +1072,17 @@ class MisbehaviourSet(Entity):
     
 class ControlStrategyReport():
     """Represents a Control Strategy Report."""
-    def __init__(self, control_strategy, uncontrolled_likelihood, root_cause, intermediate_cause):
+    def __init__(self, control_strategy, uncontrolled_likelihood, root_cause, intermediate_cause, initial_cause):
         self.control_strategy = control_strategy
         self.uncontrolled_likelihood = uncontrolled_likelihood
         self.root_cause = root_cause
+        self.initial_cause = initial_cause
         self.intermediate_cause = intermediate_cause
         self.misbehaviour = None
 
     def __str__(self):
-        return "Control Strategy Report: [{}] / [Root Cause: {}] / [Intermediate Cause: {}] / Uncontrolled Likelihood: {}".format(
-            str(self.control_strategy), str(self.root_cause), str(self.intermediate_cause), self.uncontrolled_likelihood)
+        return "Control Strategy Report: [{}] / [Initial Cause: {}] / [Root Cause: {}] / [Intermediate Cause: {}] / Uncontrolled Likelihood: {}".format(
+            str(self.control_strategy), str(self.initial_cause), str(self.root_cause), str(self.intermediate_cause), self.uncontrolled_likelihood)
 
     def __hash__(self):
         return hash((self.control_strategy, self.uncontrolled_likelihood, self.root_cause, self.intermediate_cause, self.misbehaviour))
@@ -1087,15 +1113,17 @@ class ControlStrategyReport():
 
     @classmethod
     def cvs_header(cls):
-        return ["Root Cause", "Intermediate Cause", "Consequence",
+        return ["Initial Cause", "Root Cause", "Intermediate Cause", "Consequence",
                 "Likelihood", "Impact", "Risk",
                 "Control", "Residual Likelihood", "Residual Risk", "Comment"]
 
     def csv_row(self):
         intermediate = self.intermediate_cause.comment
-        if self.root_cause.pretty_print() == self.intermediate_cause.comment:
-            intermediate = ""
-        return [self.root_cause.pretty_print(), intermediate, self.misbehaviour.comment,
+        # if self.root_cause.pretty_print() == self.intermediate_cause.comment:
+        #     intermediate = ""
+        if self.intermediate_cause.is_normal_op:
+            intermediate += " (normal operation)"
+        return [self.initial_cause.pretty_print(), self.root_cause.pretty_print(), intermediate, self.misbehaviour.comment,
                 self.uncontrolled_likelihood, self.misbehaviour.impact_number, dm_risk_lookup[self.misbehaviour.impact_number][self.uncontrolled_likelihood],
                 self.control_strategy.description, self.control_strategy.maximum_likelihood, dm_risk_lookup[self.misbehaviour.impact_number][self.control_strategy.maximum_likelihood],
                 self.additional_comment()]
