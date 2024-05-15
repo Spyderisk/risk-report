@@ -739,14 +739,13 @@ class Threat(Entity):
 
         # A Threat is an "initial cause" if all the TrustworthinessAttributeSets that cause it are "external causes" and it is a normal-op.
         #  The isInitialCause predicate is different.
-        # A Threat is a "root cause" if it is not a normal-op (it is an "adverse" threat), it has TWAS, it would not be undermined by the maximum likelihood of its parent causes.
+        # A Threat is a "root cause" if it is not a normal-op (it is an "adverse" threat), it has TWAS, it would not be undermined by the maximum likelihood of its parent causes, and it has a non-zero likelihood
         #  The isRootCause predicate cannot be used for this because its placement depends on the likelihood calculation and this analysis is considering what happens without some CSGs so we cannot use this.
-        # TODO: check and clarify lines above
         # A Threat is an "intermediate cause" if there is an effective control strategy at it. These threats are set as attributes of the ControlStrategyReports
 
         # Examine all parent Misbehaviours (of both primary and secondary Threats) that are not already in the current path
         # Put the returned tuples in parent_return_values
-        # A Threat needs all causes to be on good paths
+        # A Threat requires all of its causes to be on good paths
         parent_return_values = []
         parents = self.misbehaviour_parents
         for ms in parents:
@@ -792,8 +791,9 @@ class Threat(Entity):
         if len(asserted_twas_levels):
             asserted_likelihood = min([inverse(level) for level in asserted_twas_levels])
 
-        # We need a different root cause definition to the predicate
-        is_root_cause = len(asserted_twas_levels) and combined_max_likelihood == asserted_likelihood and not self.is_normal_op
+        # We need a different root cause definition to the meaning of the predicate added in the risk calculation
+        # TODO: include secondary threats as well
+        is_root_cause = len(asserted_twas_levels) and combined_max_likelihood <= asserted_likelihood and not self.is_normal_op and asserted_likelihood > 0
         if is_root_cause:
             logging.debug("  " * len(current_path) + "Threat is root cause")
             combined_root_cause = LogicalExpression([make_symbol(self.uriref)])
@@ -802,8 +802,9 @@ class Threat(Entity):
 
         combined_is_normal_op = parents_are_normal_op and self.is_normal_op  # parents + self (to return)
 
-        # We need a slightly different initial cause definition to the meaning of the predicate
-        if all([twas.is_external_cause for twas in self.trustworthiness_attribute_sets]) and self.is_normal_op:
+        # We need a different initial cause definition to the meaning of the predicate added in the risk calculation
+        # TODO: include secondary threats as well
+        if all([twas.is_external_cause for twas in self.trustworthiness_attribute_sets]) and self.is_normal_op and combined_max_likelihood > 0:
             logging.debug("  " * len(current_path) + "Threat is initial cause: " + str(self))
             combined_initial_cause = LogicalExpression([make_symbol(self.uriref)])
         else:
@@ -952,6 +953,11 @@ class MisbehaviourSet(Entity):
     @property
     def is_normal_op(self):
         return (self.uriref, IS_NORMAL_OP_EFFECT, Literal(True)) in self.graph
+
+    @property
+    def is_external_cause(self):
+        # if the domain model doesn't support mixed cause Threats, then some MS may be external causes
+        return (self.uriref, IS_EXTERNAL_CAUSE, Literal(True)) in self.graph
 
     @property
     def threat_parents(self):
