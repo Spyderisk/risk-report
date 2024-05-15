@@ -435,24 +435,24 @@ class ControlStrategy(Entity):
     @property
     def description(self):
         asset_labels = self.control_set_asset_labels()  # get unique set of asset labels the CSG involves (whether proposed or not)
-        asset_labels = [abbreviate_asset_label(label) for label in asset_labels]
+        asset_labels = [f'"{abbreviate_asset_label(label)}"' for label in asset_labels]
         asset_labels.sort()
-        comment = "{} ({})".format(un_camel_case(dm_control_strategies[self._domain_model_uriref().split('/')[-1]]["label"]), ", ".join(asset_labels))
+        comment = "{} ({})".format(un_camel_case(dm_control_strategies[self._domain_model_uri()]["label"]), ", ".join(asset_labels))
         return comment
 
-    def _domain_model_uriref(self):
-        return self.graph.value(self.uriref, PARENT)
+    def _domain_model_uri(self):
+        return self.graph.value(self.uriref, PARENT).split("/")[-1]
 
-    def _effectiveness_uriref(self):
-        return dm_control_strategies[self._domain_model_uriref().split("/")[-1]]["hasBlockingEffect"]
+    def _effectiveness_uri(self):
+        return dm_control_strategies[self._domain_model_uri()]["hasBlockingEffect"].split("/")[-1]
 
     @property
     def effectiveness_number(self):
-        return dm_trustworthiness_levels[self._effectiveness_uriref().split('/')[-1]]["number"]
+        return dm_trustworthiness_levels[self._effectiveness_uri()]["number"]
 
     @property
     def effectiveness_label(self):
-        return dm_trustworthiness_levels[self._effectiveness_uriref().split('/')[-1]]["label"]
+        return dm_trustworthiness_levels[self._effectiveness_uri()]["label"]
 
     @property
     def maximum_likelihood(self):
@@ -460,12 +460,12 @@ class ControlStrategy(Entity):
 
     @property
     def is_current_risk_csg(self):
-        parent_uriref = self._domain_model_uriref()
-        return dm_control_strategies[parent_uriref.split('/')[-1]]["currentRisk"] and ("-Runtime" in str(parent_uriref) or "-Implementation" in str(parent_uriref))
+        parent_uriref = self._domain_model_uri()
+        return dm_control_strategies[parent_uriref]["currentRisk"] and ("-Runtime" in str(parent_uriref) or "-Implementation" in str(parent_uriref))
 
     @property
     def is_future_risk_csg(self):
-        return dm_control_strategies[self._domain_model_uriref().split('/')[-1]]["futureRisk"]
+        return dm_control_strategies[self._domain_model_uri()]["futureRisk"]
 
     @cached_property
     def blocked_threats(self):        
@@ -504,16 +504,16 @@ class TrustworthinessAttributeSet(Entity):
         return "Trustworthiness Attribute Set: {}\n  Label: {}\n  Description: {}\n".format(
             str(self.uriref), self.label, self.description)
 
-    def _twa_uriref(self):
+    def _twa_uri(self):
         return self.graph.value(self.uriref, HAS_TWA).split('/')[-1]
 
-    def _asserted_tw_level_uriref(self):
+    def _asserted_tw_level_uri(self):
         uriref = self.graph.value(self.uriref, HAS_ASSERTED_LEVEL)
         if uriref is None:
             return None
         return uriref.split('/')[-1]
 
-    def _inferred_tw_level_uriref(self):
+    def _inferred_tw_level_uri(self):
         uriref = self.graph.value(self.uriref, HAS_INFERRED_LEVEL)
         if uriref is None:
             return None
@@ -523,7 +523,7 @@ class TrustworthinessAttributeSet(Entity):
     def label(self):
         """Return a TWAS label"""
         try:
-            return dm_trustworthiness_attributes[self._twa_uriref()]["label"]
+            return dm_trustworthiness_attributes[self._twa_uri()]["label"]
         except KeyError:
             # might get here if the domain model CSVs are the wrong ones
             logging.warning("No TWAS label for " + str(self.uriref))
@@ -542,7 +542,7 @@ class TrustworthinessAttributeSet(Entity):
     def description(self):
         """Return a long description of a TWAS"""
         try:
-            return dm_trustworthiness_attributes[self._twa_uriref()]["description"]
+            return dm_trustworthiness_attributes[self._twa_uri()]["description"]
         except KeyError:
             # might get here if the domain model CSVs are the wrong ones
             logging.warning("No TWAS description for " + str(self.uriref))
@@ -550,19 +550,19 @@ class TrustworthinessAttributeSet(Entity):
 
     @property
     def inferred_level_number(self):
-        return dm_trustworthiness_levels[self._inferred_tw_level_uriref()]["number"]
+        return dm_trustworthiness_levels[self._inferred_tw_level_uri()]["number"]
 
     @property
     def inferred_level_label(self):
-        return dm_trustworthiness_levels[self._inferred_tw_level_uriref()]["label"]
+        return dm_trustworthiness_levels[self._inferred_tw_level_uri()]["label"]
 
     @property
     def asserted_level_number(self):
-        return dm_trustworthiness_levels[self._asserted_tw_level_uriref()]["number"]
+        return dm_trustworthiness_levels[self._asserted_tw_level_uri()]["number"]
 
     @property
     def inferred_level_label(self):
-        return dm_trustworthiness_levels[self._asserted_tw_level_uriref()]["label"]
+        return dm_trustworthiness_levels[self._asserted_tw_level_uri()]["label"]
 
     @property
     def is_external_cause(self):
@@ -853,25 +853,25 @@ class MisbehaviourSet(Entity):
     def __str__(self):
         return "Misbehaviour: {} ({})".format(self.comment, str(self.uriref))
 
-    def _likelihood_uriref(self):
+    def _likelihood_uri(self):
         uriref = self.graph.value(self.uriref, HAS_PRIOR)
         if uriref is None:
             return None
         return uriref.split('/')[-1]
 
-    def _impact_uriref(self):
+    def _impact_uri(self):
         uriref = self.graph.value(self.uriref, HAS_IMPACT)
         if uriref is None:
             return None
         return uriref.split('/')[-1]
 
-    def _risk_uriref(self):
+    def _risk_uri(self):
         uriref = self.graph.value(self.uriref, HAS_RISK)
         if uriref is None:
             return None
         return uriref.split('/')[-1]
 
-    def _domain_model_uriref(self):
+    def _domain_model_uri(self):
         uriref = self.graph.value(self.uriref, HAS_MISBEHAVIOUR)
         if uriref is None:
             return None
@@ -881,7 +881,7 @@ class MisbehaviourSet(Entity):
     def label(self):
         """Return a misbehaviour label"""
         try:
-            return dm_misbehaviours[self._domain_model_uriref()]["label"]
+            return dm_misbehaviours[self._domain_model_uri()]["label"]
         except KeyError:
             # might get here if the domain model CSVs are the wrong ones
             logging.warning("No MS label for " + str(self.uriref))
@@ -919,7 +919,7 @@ class MisbehaviourSet(Entity):
     def description(self):
         """Return a long description of a misbehaviour"""
         try:
-            return dm_misbehaviours[self._domain_model_uriref()]["description"]
+            return dm_misbehaviours[self._domain_model_uri()]["description"]
         except KeyError:
             # might get here if the domain model CSVs are the wrong ones
             logging.warning("No MS description for " + str(self.uriref))
@@ -927,27 +927,27 @@ class MisbehaviourSet(Entity):
 
     @property
     def likelihood_number(self):
-        return dm_likelihood_levels[self._likelihood_uriref()]["number"]
+        return dm_likelihood_levels[self._likelihood_uri()]["number"]
 
     @property
     def likelihood_label(self):
-        return dm_likelihood_levels[self._likelihood_uriref()]["label"]
+        return dm_likelihood_levels[self._likelihood_uri()]["label"]
 
     @property
     def impact_number(self):
-        return dm_impact_levels[self._impact_uriref()]["number"]
+        return dm_impact_levels[self._impact_uri()]["number"]
 
     @property
     def impact_label(self):
-        return dm_impact_levels[self._impact_uriref()]["label"]
+        return dm_impact_levels[self._impact_uri()]["label"]
 
     @property
     def risk_number(self):
-        return dm_risk_levels[self._risk_uriref()]["number"]
+        return dm_risk_levels[self._risk_uri()]["number"]
 
     @property
     def risk_label(self):
-        return dm_risk_levels[self._risk_uriref()]["label"]
+        return dm_risk_levels[self._risk_uri()]["label"]
 
     @property
     def is_normal_op(self):
@@ -1303,4 +1303,3 @@ with open(output_filename, 'w', newline='') as file:
         writer.writerow(csg_report.csv_row())
 
 # TODO: include root causes that are not controlled at all on their path to the MS
-# TODO: do we want the root causes to be normal_ops (as-is) or adverse threats?
