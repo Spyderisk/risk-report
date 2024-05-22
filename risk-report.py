@@ -771,12 +771,32 @@ class Threat(Entity):
         # A Threat requires all of its causes to be on good paths
         parent_return_values = []
         parents = self.misbehaviour_parents
+
+        if len(parents) == 0:
+            # this shouldn't happen
+            raise Exception("Threat has no parents")
+
+        # We only need one error to know we should throw an exception, but examining all paths will find all loopback nodes and may
+        # make the cached result more useful.
+        combined_loopback_node_uris = set()
+        throw_error = False
         for ms in parents:
             if ms.uriref not in current_path:
-                parent_return_values.append(ms.explain_likelihood(current_path))  # may throw an exception
+                try:
+                    parent_return_values.append(ms.explain_likelihood(current_path))  # may throw an exception
+                except TreeTraversalError as error:
+                    logging.debug("    " * len(current_path) + "Error: parent Misbehaviour cannot be caused: " + str(ms.uriref))
+                    combined_loopback_node_uris |= error.loopback_node_uris
+                    throw_error = True
             else:
-                logging.debug("    " * len(current_path) + "Parent Misbehaviour is on current path: " + str(ms.uriref))
-                raise TreeTraversalError([ms.uriref])
+                logging.debug("    " * len(current_path) + "Error: parent Misbehaviour is on current path: " + str(ms.uriref))
+                combined_loopback_node_uris.add(ms.uriref)
+                throw_error = True
+
+        combined_loopback_node_uris.discard(self.uriref)
+
+        if throw_error:
+            raise TreeTraversalError(combined_loopback_node_uris)
 
         # To compute the inferred_uncontrolled_likelihood:
         #   For a primary threat it's the entry-point TWASs' inferred values we need to look at.
@@ -786,13 +806,13 @@ class Threat(Entity):
 
         inferred_twas_trustworthiness_levels = [twas.inferred_level_number for twas in self.trustworthiness_attribute_sets]
         inferred_twas_likelihoods = [inverse(level) for level in inferred_twas_trustworthiness_levels]
-        if len(inferred_twas_likelihoods):
+        if len(inferred_twas_likelihoods) > 0:
             inferred_twas_likelihood = min(inferred_twas_likelihoods)  # take min() as this is a threat
         else:
             inferred_twas_likelihood = -1
 
         secondary_parent_misbehaviour_likelihoods = [ms.likelihood_number for ms in self.secondary_threat_misbehaviour_parents]
-        if len(secondary_parent_misbehaviour_likelihoods):
+        if len(secondary_parent_misbehaviour_likelihoods) > 0:
             secondary_parent_misbehaviour_likelihood = min(secondary_parent_misbehaviour_likelihoods)  # take min() as this is a threat
         else:
             secondary_parent_misbehaviour_likelihood = -1
@@ -801,7 +821,7 @@ class Threat(Entity):
 
         # TODO: add in threat frequency
 
-        logging.debug("    " * len(current_path) + "Likelihoods: TWAS " + str(inferred_twas_likelihoods) + " => " + str(inferred_twas_likelihood) + " / Secondary " + str(secondary_parent_misbehaviour_likelihoods) + " => " + str(secondary_parent_misbehaviour_likelihood) + " / Parent " + str(parent_likelihood))
+        logging.debug("    " * len(current_path) + "Likelihoods: inv(TWAS) " + str(inferred_twas_likelihoods) + " => " + str(inferred_twas_likelihood) + " / Secondary " + str(secondary_parent_misbehaviour_likelihoods) + " => " + str(secondary_parent_misbehaviour_likelihood) + " / Result " + str(parent_likelihood))
 
         # Combine and return parent return values:
         #     min(the max_likelihood values) combined with the uncontrolled_inferred_likelihood
@@ -817,10 +837,8 @@ class Threat(Entity):
         combined_max_likelihood = min([ret.max_likelihood for ret in parent_return_values])  # take min() as this is a threat
         combined_max_likelihood = max(combined_max_likelihood, parent_likelihood)  # take max() as we are combining two options
 
-        # parents_are_normal_op = all([ret["is_normal_op"] for ret in parent_return_values])  # are all parents normal_ops?
-
         asserted_twas_levels = [twas.asserted_level_number for twas in self.trustworthiness_attribute_sets]
-        if len(asserted_twas_levels):
+        if len(asserted_twas_levels) > 0:
             asserted_likelihood = min([inverse(level) for level in asserted_twas_levels])
 
         # We need a different root cause definition to the meaning of the predicate added in the risk calculation
@@ -832,8 +850,6 @@ class Threat(Entity):
         else:
             combined_root_cause = LogicalExpression.create_or_none([ret.root_cause for ret in parent_return_values], all_required=True)
 
-        # combined_is_normal_op = parents_are_normal_op and self.is_normal_op  # parents + self (to return)
-
         # We need a different initial cause definition to the meaning of the predicate added in the risk calculation
         # TODO: include secondary threats as well
         if all([twas.is_external_cause for twas in self.trustworthiness_attribute_sets]) and self.is_normal_op and parent_likelihood > 0:
@@ -844,9 +860,6 @@ class Threat(Entity):
 
         combined_cause_node_uris = set().union(*[ret.cause_node_uris for ret in parent_return_values])
         combined_cause_node_uris.add(self.uriref)
-
-        combined_loopback_node_uris = set().union(*[ret.loopback_node_uris for ret in parent_return_values])
-        combined_loopback_node_uris.discard(self.uriref)
 
         csg_reports = set()
         if parent_likelihood > self.likelihood_number:
@@ -1065,6 +1078,7 @@ class MisbehaviourSet(Entity):
                     intermediate_cause=None,
                     misbehaviour=self)
                 csg_reports.add(csg_report)
+                logging.debug(str(csg_report))
 
             # make a copy of all the CSG_reports and add self to each one
             for csg_report in explanation.csg_reports:
@@ -1087,10 +1101,24 @@ class MisbehaviourSet(Entity):
         parent_return_values = []
 
         # list to hold loopback_node_uris from catching exception
-        loopback_node_uri_sets = []
+        combined_loopback_node_uris = set()
 
         # Find all parent Threats (could be none)
         parents = self.threat_parents
+
+        if len(parents) == 0:
+            # nothing can cause this MisbehaviourSet: that's okay
+            logging.debug("    " * len(current_path) + "Misbehaviour has no causes: " + str(self))
+            # return minimal explanation:
+            return Explanation(
+                initial_cause=None,
+                root_cause=None,
+                max_likelihood=self.likelihood_number,
+                cause_node_uris=set([self.uriref]),
+                loopback_node_uris=set(),
+                csg_reports=set(),
+                uncontrolled_root_cause=None
+            )
 
         for threat in parents:
             if threat.uriref not in current_path:
@@ -1098,29 +1126,37 @@ class MisbehaviourSet(Entity):
                 try:
                     parent_return_value = threat.explain_likelihood(current_path)
                     # if max_likelihood is >= the misbehaviour's likelihood, add the return value to the list
+                    # otherwise there is never any way this parent could be the cause of this Misbehaviour
                     if parent_return_value.max_likelihood >= self.likelihood_number:
                         parent_return_values.append(parent_return_value)
+                    combined_loopback_node_uris |= parent_return_value.loopback_node_uris
                 except TreeTraversalError as error:
-                    logging.debug("    " * len(current_path) + "TreeTraversalError when Explaining Threat: " + str(threat.uriref))
-                    loopback_node_uri_sets.append(error.loopback_node_uris)
+                    # logging.debug("    " * len(current_path) + "    TreeTraversalError when Explaining Threat: " + str(threat.uriref))
+                    combined_loopback_node_uris |= error.loopback_node_uris
             else:
                 logging.debug("    " * len(current_path) + "Parent Threat on current path: " + str(threat.uriref))
+                combined_loopback_node_uris.add(threat.uriref)
+
+        combined_loopback_node_uris.discard(self.uriref)
 
         if len(parent_return_values) == 0:
-            # there were no parents (or none that we had not already visited), so nothing is causing this Misbehaviour
-            logging.debug("    " * len(current_path) + "Misbehaviour is at the top of the tree: " + str(self))
-            # Use "None" as initial_cause: this is picked up in Threat.explain() and the Threat is then used as the initial cause
-            explanation = Explanation(
-                initial_cause=None,
-                root_cause=None,
-                max_likelihood=self.likelihood_number,
-                cause_node_uris=set([self.uriref]),
-                loopback_node_uris=set(),
-                csg_reports=[],
-                uncontrolled_root_cause=None
-            )
-            logging.debug("    " * len(current_path) + str(explanation))
-            return explanation
+            logging.debug("    " * len(current_path) + "Error: no parent Threats can be caused")
+            raise TreeTraversalError(combined_loopback_node_uris)
+
+            # # there were no parents (or none that we had not already visited), so nothing is causing this Misbehaviour
+            # logging.debug("    " * len(current_path) + "Misbehaviour is at the top of the tree: " + str(self))
+            # # Use "None" as initial_cause: this is picked up in Threat.explain() and the Threat is then used as the initial cause
+            # explanation = Explanation(
+            #     initial_cause=None,
+            #     root_cause=None,
+            #     max_likelihood=self.likelihood_number,
+            #     cause_node_uris=set([self.uriref]),
+            #     loopback_node_uris=set(),
+            #     csg_reports=[],
+            #     uncontrolled_root_cause=None
+            # )
+            # logging.debug("    " * len(current_path) + str(explanation))
+            # return explanation
 
         # Combine and return undiscarded parent return values (could be none) =>
         #     max(the max_L values)
@@ -1137,14 +1173,10 @@ class MisbehaviourSet(Entity):
         #     OR(uncontrolled_root_cause expressions)
         combined_max_likelihood = max([ret.max_likelihood for ret in parent_return_values])
         combined_root_cause = LogicalExpression.create_or_none([ret.root_cause for ret in parent_return_values], all_required=False)
-        # combined_is_normal_op = all([ret["is_normal_op"] for ret in parent_return_values]) and self.is_normal_op
         combined_initial_cause = LogicalExpression.create_or_none([ret.initial_cause for ret in parent_return_values], all_required=False)
         combined_csg_reports = set().union(*[ret.csg_reports for ret in parent_return_values])
         combined_cause_node_uris = set().union(*[ret.cause_node_uris for ret in parent_return_values])
         combined_cause_node_uris.add(self.uriref)
-        combined_loopback_node_uris = set().union(*[ret.loopback_node_uris for ret in parent_return_values])
-        combined_loopback_node_uris |= set().union(*loopback_node_uri_sets)
-        combined_loopback_node_uris.discard(self.uriref)
         combined_uncontrolled_root_cause = LogicalExpression.create_or_none([ret.uncontrolled_root_cause for ret in parent_return_values], all_required=False)
         return Explanation(
             initial_cause=combined_initial_cause,
@@ -1231,17 +1263,21 @@ class ControlStrategyReport():
             if self.intermediate_cause.is_normal_op:
                 intermediate += " (normal operation)"
 
+        likelihood = self.uncontrolled_likelihood
+        impact = self.misbehaviour.impact_number
+        risk = dm_risk_lookup[impact][likelihood]
+
         if self.control_strategy is None:
             control_strategy = "None"
-            residual_likelihood = "-"
-            residual_risk = "-"
+            residual_likelihood = self.uncontrolled_likelihood
+            residual_risk = risk
         else:
             control_strategy = self.control_strategy.description
             residual_likelihood = self.control_strategy.maximum_likelihood
             residual_risk = dm_risk_lookup[self.misbehaviour.impact_number][self.control_strategy.maximum_likelihood]
 
         return [initial, root, intermediate, self.misbehaviour.comment,
-                self.uncontrolled_likelihood, self.misbehaviour.impact_number, dm_risk_lookup[self.misbehaviour.impact_number][self.uncontrolled_likelihood],
+                likelihood, impact, risk,
                 control_strategy, residual_likelihood, residual_risk,
                 self.additional_comment()]
 
