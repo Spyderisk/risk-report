@@ -1143,21 +1143,6 @@ class MisbehaviourSet(Entity):
             logging.debug("    " * len(current_path) + "Error: no parent Threats can be caused")
             raise TreeTraversalError(combined_loopback_node_uris)
 
-            # # there were no parents (or none that we had not already visited), so nothing is causing this Misbehaviour
-            # logging.debug("    " * len(current_path) + "Misbehaviour is at the top of the tree: " + str(self))
-            # # Use "None" as initial_cause: this is picked up in Threat.explain() and the Threat is then used as the initial cause
-            # explanation = Explanation(
-            #     initial_cause=None,
-            #     root_cause=None,
-            #     max_likelihood=self.likelihood_number,
-            #     cause_node_uris=set([self.uriref]),
-            #     loopback_node_uris=set(),
-            #     csg_reports=[],
-            #     uncontrolled_root_cause=None
-            # )
-            # logging.debug("    " * len(current_path) + str(explanation))
-            # return explanation
-
         # Combine and return undiscarded parent return values (could be none) =>
         #     max(the max_L values)
         #     OR(root_cause expressions)
@@ -1211,11 +1196,11 @@ class ControlStrategyReport():
         self.misbehaviour = misbehaviour
 
     def __str__(self):
-        return "Control Strategy Report: [{}] / [Initial Cause: {}] / [Root Cause: {}] / [Intermediate Cause: {}] / Uncontrolled Likelihood: {}".format(
-            str(self.control_strategy), str(self.initial_cause), str(self.root_cause), str(self.intermediate_cause), self.uncontrolled_likelihood)
+        return "Control Strategy Report: [{}] / [Initial Cause: {}] / [Root Cause: {}] / [Intermediate Cause: {}] / Uncontrolled Likelihood: {} / Misbehaviour Set: {}".format(
+            str(self.control_strategy), str(self.initial_cause), str(self.root_cause), str(self.intermediate_cause), self.uncontrolled_likelihood, str(self.misbehaviour))
 
     def __hash__(self):
-        return hash((self.control_strategy, self.uncontrolled_likelihood, self.root_cause, self.intermediate_cause, self.misbehaviour))
+        return hash((self.control_strategy, self.uncontrolled_likelihood, self.root_cause, self.initial_cause, self.intermediate_cause, self.misbehaviour))
 
     def __eq__(self, other):
         if not isinstance(other, ControlStrategyReport):
