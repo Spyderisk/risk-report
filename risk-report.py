@@ -362,7 +362,7 @@ class LogicalExpression():
             cause = "Complexity: " + str(cause_complexity)
         return cause
 
-class TreeTraversalError(Exception):
+class LoopbackError(Exception):
     """Exception raised when encountering an error during tree traversal."""
     def __init__(self, loopback_node_uris: set = None) -> None:
         """
@@ -776,15 +776,26 @@ class Threat(Entity):
             # this shouldn't happen
             raise Exception("Threat has no parents")
 
-        # We only need one error to know we should throw an exception, but examining all paths will find all loopback nodes and may
-        # make the cached result more useful.
+        # Combine and return parent return values:
+        #     min(max_likelihood values) combined with the uncontrolled_inferred_likelihood
+        #     AND(root_cause expressions) or self if self is root_cause
+        #     AND(initial_cause expressions) or self if self is initial_cause
+        #     AND(uncontrolled_cause expressions) - though there are complications
+        #     union(all cause_node_uris)
+        #       also adding self to the set
+        #     union(loopback_node_uris)
+        #       also removing self from the set to ensure the return value describes just the tree starting at self
+        #     union(csg_reports)
+        #       also adding any at self
+
+        # We only need one error to know we should throw an exception, but examining all paths will find all loopback nodes and may make the cached result more useful.
         combined_loopback_node_uris = set()
         throw_error = False
         for ms in parents:
             if ms.uriref not in current_path:
                 try:
                     parent_return_values.append(ms.explain_likelihood(current_path))  # may throw an exception
-                except TreeTraversalError as error:
+                except LoopbackError as error:
                     logging.debug("    " * len(current_path) + "Error: parent Misbehaviour cannot be caused: " + str(ms.uriref))
                     combined_loopback_node_uris |= error.loopback_node_uris
                     throw_error = True
@@ -796,7 +807,7 @@ class Threat(Entity):
         combined_loopback_node_uris.discard(self.uriref)
 
         if throw_error:
-            raise TreeTraversalError(combined_loopback_node_uris)
+            raise LoopbackError(combined_loopback_node_uris)
 
         # To compute the inferred_uncontrolled_likelihood:
         #   For a primary threat it's the entry-point TWASs' inferred values we need to look at.
@@ -823,19 +834,24 @@ class Threat(Entity):
 
         logging.debug("    " * len(current_path) + "Likelihoods: inv(TWAS) " + str(inferred_twas_likelihoods) + " => " + str(inferred_twas_likelihood) + " / Secondary " + str(secondary_parent_misbehaviour_likelihoods) + " => " + str(secondary_parent_misbehaviour_likelihood) + " / Result " + str(parent_likelihood))
 
-        # Combine and return parent return values:
-        #     min(the max_likelihood values) combined with the uncontrolled_inferred_likelihood
-        #     AND(root_cause expressions) or self if self is root_cause
-        #     AND(initial_cause expressions) or self if self is initial_cause
-        #     AND(uncontrolled_root_cause expressions) or None if thre are effective CSGs at self or any uncontrolled_root_cause is None
-        #     union of all cause_node_uris sets
-        #       also adding self to the set
-        #     union of all loopback_node_uris sets
-        #       also removing self from the set to ensure the return value describes just the tree starting at self
-        #     union of all csg_reports, adding any at self
+        combined_cause_node_uris = set().union(*[ret.cause_node_uris for ret in parent_return_values])
+        combined_cause_node_uris.add(self.uriref)
 
         combined_max_likelihood = min([ret.max_likelihood for ret in parent_return_values])  # take min() as this is a threat
         combined_max_likelihood = max(combined_max_likelihood, parent_likelihood)  # take max() as we are combining two options
+
+        # If the maximum likelihood this could ever be is zero then just abort as it cannot be a "cause" of anything: we don't care about CSGs at this Threat and it cannot be an uncontrolled cause
+        if combined_max_likelihood == 0:
+            logging.debug("    " * len(current_path) + "Threat has zero max likelihood so cannot be the cause of anything")
+            return Explanation(
+                max_likelihood=0,
+                initial_cause=None,
+                root_cause=None,
+                uncontrolled_cause=None,
+                cause_node_uris=combined_cause_node_uris,
+                loopback_node_uris=combined_loopback_node_uris,
+                csg_reports=set()
+            )
 
         asserted_twas_levels = [twas.asserted_level_number for twas in self.trustworthiness_attribute_sets]
         if len(asserted_twas_levels) > 0:
@@ -851,25 +867,23 @@ class Threat(Entity):
             combined_root_cause = LogicalExpression.create_or_none([ret.root_cause for ret in parent_return_values], all_required=True)
 
         # We need a different initial cause definition to the meaning of the predicate added in the risk calculation
-        # TODO: include secondary threats as well
-        if all([twas.is_external_cause for twas in self.trustworthiness_attribute_sets]) and self.is_normal_op and parent_likelihood > 0:
+        # TODO: include secondary threats as well? Probably aren't any though?
+        is_initial_cause = all([twas.is_external_cause for twas in self.trustworthiness_attribute_sets]) and self.is_normal_op
+        if is_initial_cause and parent_likelihood > 0:
             logging.debug("    " * len(current_path) + "Threat is initial cause: " + str(self))
             combined_initial_cause = LogicalExpression([make_symbol(self.uriref)])
         else:
             combined_initial_cause = LogicalExpression.create_or_none([ret.initial_cause for ret in parent_return_values], all_required=True)
 
-        combined_cause_node_uris = set().union(*[ret.cause_node_uris for ret in parent_return_values])
-        combined_cause_node_uris.add(self.uriref)
-
         csg_reports = set()
-        if parent_likelihood > self.likelihood_number:
-            # Some CSG(s) at this Threat have made a difference to the likelihood.
-            # Make the CSG Report objects.
-            # Note: the effective CSG could be on a normal_op Threat
+        if len(self.control_strategies) > 0:
+            logging.debug("    " * len(current_path) + "Threat has " + str(len(self.control_strategies)) + " Control Strategies. Parent likelihood: " + str(parent_likelihood) + " / Threat likelihood: " + str(self.likelihood_number))
             for csg in self.control_strategies:
-                logging.debug("    " * len(current_path) + "Candidate Control Strategy: " + csg.description + ", active " + str(csg.is_active) + ", max likelihood: " + str(csg.maximum_likelihood))
+                logging.debug("    " * len(current_path) + "Candidate Control Strategy: " + csg.description + " / Active: " + str(csg.is_active) + " / Max likelihood: " + str(csg.maximum_likelihood))
                 if csg.maximum_likelihood <= parent_likelihood and csg.is_active:
-                    # this CSG is effective / at least prevents the likelihood being any higher
+                    # This CSG is effective / at least prevents the likelihood being any higher
+                    # Make the CSG Report object.
+                    # Note: the effective CSG could be on a normal_op Threat
                     logging.debug("    " * len(current_path) + "Effective Control Strategy: " + str(csg))
                     csg_report = ControlStrategyReport(
                         control_strategy=csg, uncontrolled_likelihood=parent_likelihood,
@@ -877,24 +891,40 @@ class Threat(Entity):
                     csg_reports.add(csg_report)
                     logging.debug("    " * len(current_path) + str(csg_report))
 
-        # If there are no effective CSGs at this Threat, then see if all the causes (where the parent also has a root_cause) are also uncontrolled (not None). If so then combine them with an AND.
-        combined_uncontrolled_root_cause = None
-        if len(csg_reports) == 0:
-            if is_root_cause:
-                combined_uncontrolled_root_cause = combined_root_cause  # this is just the LogicalExpression for self
-            else:
-                uncontrolled_root_causes = []
-                all_parents_uncontrolled = True
-                for parent in parent_return_values:
-                    if parent.uncontrolled_root_cause is None and parent.root_cause is not None:
-                        all_parents_uncontrolled = False
-                        break
-                    uncontrolled_root_causes.append(parent.uncontrolled_root_cause)
-                if all_parents_uncontrolled:
-                    combined_uncontrolled_root_cause = LogicalExpression.create_or_none(uncontrolled_root_causes, all_required=True)
+        # If there are no effective CSGs at this Threat then we might have an uncontrolled root cause.
+        # See if all the causes are also uncontrolled (have no CSG reports). If so then combine them with an AND.
+        # Exclude CSG Reports on normal-op Threats as they don't count for an uncontrolled root cause (they are further up the graph).
 
+        # We actually need to look for uncontrolled trees, including any initial causes or threats in the normal-op graph.
+        # Need to ignore things that are also not caused (0 likelihood, i.e. the inherent likelihood is zero, not because it was controlled).
+
+        if len(csg_reports) > 0:
+            # Special case: there are effective CSGs at self
+            combined_uncontrolled_cause = None
+            logging.debug("    " * len(current_path) + "Threat has an effective CSG => no uncontrolled cause")
+        else:
+            # General case, asssume controlled unless we find otherwise
+            controlled = False
+            for parent in parent_return_values:
+                # If a parent is a Misbehaviour at the top of the tree then uncontrolled_cause is None, but it is uncontrolled really, we just don't want to add the Misbehaviour to the uncontrolled_cause expression
+                if parent.uncontrolled_cause is None and len(parent.cause_node_uris) > 1:
+                    controlled = True
+                    break
+            if controlled:
+                combined_uncontrolled_cause = None
+                logging.debug("    " * len(current_path) + "Threat has 1 or more controlled parents => no uncontrolled cause")
+            else:
+                logging.debug("    " * len(current_path) + "Threat has no controlled parents => uncontrolled cause")
+                combined_uncontrolled_cause = LogicalExpression.create_or_none([parent.uncontrolled_cause for parent in parent_return_values], all_required=True)
+                if combined_uncontrolled_cause is None:
+                    # Could get here if all parents were top-of-tree Misbehaviours
+                    logging.debug("    " * len(current_path) + "Using self as uncontrolled cause")
+                    combined_uncontrolled_cause = LogicalExpression([make_symbol(self.uriref)])
+
+        # Combine all the CSG reports from the parents and add in any from this Threat:
         combined_csg_reports = set().union(*[ret.csg_reports for ret in parent_return_values])
         combined_csg_reports |= csg_reports
+
         return Explanation(
             initial_cause=combined_initial_cause,
             root_cause=combined_root_cause,
@@ -902,7 +932,7 @@ class Threat(Entity):
             cause_node_uris=combined_cause_node_uris,
             loopback_node_uris=combined_loopback_node_uris,
             csg_reports=combined_csg_reports,
-            uncontrolled_root_cause=combined_uncontrolled_root_cause)
+            uncontrolled_cause=combined_uncontrolled_cause)
 
 
 class MisbehaviourSet(Entity):
@@ -1059,7 +1089,7 @@ class MisbehaviourSet(Entity):
         self.likelihood_explanations.append(explanation)
 
         # If we are not the first node in the tree then return the (from-cached or newly-saved) explanation.
-        # Otherwise, return a copy off all the csg_reports, adding in another one if there is an uncontrolled_root_cause
+        # Otherwise, return a copy off all the csg_reports, adding in another one if there is an uncontrolled_cause
         if len(current_path) > 0:
             return explanation
         else:
@@ -1067,14 +1097,14 @@ class MisbehaviourSet(Entity):
 
             csg_reports = set()
 
-            # if there is an uncontrolled_root_cause then add a CSG_report about it
-            if explanation.uncontrolled_root_cause != None:
-                logging.debug("Adding uncontrolled root cause report")
+            # if there is an uncontrolled_cause then add a CSG_report about it
+            if explanation.uncontrolled_cause != None:
+                logging.debug("Adding uncontrolled cause report")
                 csg_report = ControlStrategyReport(
                     control_strategy=None,
                     uncontrolled_likelihood=explanation.max_likelihood,
                     initial_cause=explanation.initial_cause,
-                    root_cause=explanation.uncontrolled_root_cause,
+                    root_cause=explanation.uncontrolled_cause,
                     intermediate_cause=None,
                     misbehaviour=self)
                 csg_reports.add(csg_report)
@@ -1105,11 +1135,11 @@ class MisbehaviourSet(Entity):
 
         # Find all parent Threats (could be none)
         parents = self.threat_parents
-
+        
         if len(parents) == 0:
-            # nothing can cause this MisbehaviourSet: that's okay
+            # Nothing can cause this MisbehaviourSet: that's okay
             logging.debug("    " * len(current_path) + "Misbehaviour has no causes: " + str(self))
-            # return minimal explanation:
+            # Return minimal explanation:
             return Explanation(
                 initial_cause=None,
                 root_cause=None,
@@ -1117,8 +1147,20 @@ class MisbehaviourSet(Entity):
                 cause_node_uris=set([self.uriref]),
                 loopback_node_uris=set(),
                 csg_reports=set(),
-                uncontrolled_root_cause=None
+                uncontrolled_cause=None
             )
+
+        # Combine and return undiscarded parent return values (could be none) =>
+        #     union(cause_node_uris)
+        #       also adding self to the set
+        #     max(the max_likelihood values)
+        #     OR(root_cause expressions)
+        #     OR(initial_cause expressions)
+        #     OR(uncontrolled_cause expressions)
+        #     union(csg_reports)
+        #       It is really an OR but we're just dropping that info.
+        #     union(loopback_node_uris) from both parent_return_values (good) and caught LoopbackErrors
+        #       also removing self from the set to ensure the return value describes just the tree starting at self
 
         for threat in parents:
             if threat.uriref not in current_path:
@@ -1130,8 +1172,7 @@ class MisbehaviourSet(Entity):
                     if parent_return_value.max_likelihood >= self.likelihood_number:
                         parent_return_values.append(parent_return_value)
                     combined_loopback_node_uris |= parent_return_value.loopback_node_uris
-                except TreeTraversalError as error:
-                    # logging.debug("    " * len(current_path) + "    TreeTraversalError when Explaining Threat: " + str(threat.uriref))
+                except LoopbackError as error:
                     combined_loopback_node_uris |= error.loopback_node_uris
             else:
                 logging.debug("    " * len(current_path) + "Parent Threat on current path: " + str(threat.uriref))
@@ -1141,28 +1182,30 @@ class MisbehaviourSet(Entity):
 
         if len(parent_return_values) == 0:
             logging.debug("    " * len(current_path) + "Error: no parent Threats can be caused")
-            raise TreeTraversalError(combined_loopback_node_uris)
+            raise LoopbackError(combined_loopback_node_uris)
 
-        # Combine and return undiscarded parent return values (could be none) =>
-        #     max(the max_L values)
-        #     OR(root_cause expressions)
-        #     true if all of the parents were normal_ops and self is normal_op
-        #     OR(initial_cause expressions)
-        #     union of all cause_node_uris sets
-        #       also adding self to the set
-        #     union of all loopback_node_uris sets from both parent_return_values (good) and loopback_node_uri_sets (errors)
-        #       also removing self from the set to ensure the return value describes just the tree starting at self
-        #     union of csg_reports
-        #       It is really an OR but we're just dropping that info.
-        #     union of loopback_nodes (removing self if it's in there)
-        #     OR(uncontrolled_root_cause expressions)
-        combined_max_likelihood = max([ret.max_likelihood for ret in parent_return_values])
-        combined_root_cause = LogicalExpression.create_or_none([ret.root_cause for ret in parent_return_values], all_required=False)
-        combined_initial_cause = LogicalExpression.create_or_none([ret.initial_cause for ret in parent_return_values], all_required=False)
-        combined_csg_reports = set().union(*[ret.csg_reports for ret in parent_return_values])
         combined_cause_node_uris = set().union(*[ret.cause_node_uris for ret in parent_return_values])
         combined_cause_node_uris.add(self.uriref)
-        combined_uncontrolled_root_cause = LogicalExpression.create_or_none([ret.uncontrolled_root_cause for ret in parent_return_values], all_required=False)
+
+        combined_max_likelihood = max([ret.max_likelihood for ret in parent_return_values])
+
+        if combined_max_likelihood == 0:
+            logging.debug("    " * len(current_path) + "Misbehaviour has zero max likelihood so cannot be the cause of anything")
+            return Explanation(
+                initial_cause=None,
+                root_cause=None,
+                max_likelihood=0,
+                cause_node_uris=combined_cause_node_uris,
+                loopback_node_uris=combined_loopback_node_uris,
+                csg_reports=set(),
+                uncontrolled_cause=None
+            )
+
+        combined_root_cause = LogicalExpression.create_or_none([ret.root_cause for ret in parent_return_values], all_required=False)
+        combined_initial_cause = LogicalExpression.create_or_none([ret.initial_cause for ret in parent_return_values], all_required=False)
+        combined_uncontrolled_cause = LogicalExpression.create_or_none([ret.uncontrolled_cause for ret in parent_return_values], all_required=False)
+        combined_csg_reports = set().union(*[ret.csg_reports for ret in parent_return_values])
+
         return Explanation(
             initial_cause=combined_initial_cause,
             root_cause=combined_root_cause,
@@ -1170,20 +1213,20 @@ class MisbehaviourSet(Entity):
             cause_node_uris=combined_cause_node_uris,
             loopback_node_uris=combined_loopback_node_uris,
             csg_reports=combined_csg_reports,
-            uncontrolled_root_cause=combined_uncontrolled_root_cause)
+            uncontrolled_cause=combined_uncontrolled_cause)
 
 class Explanation:
-    def __init__(self, initial_cause, root_cause, max_likelihood, cause_node_uris, loopback_node_uris, csg_reports, uncontrolled_root_cause):
+    def __init__(self, initial_cause, root_cause, max_likelihood, cause_node_uris, loopback_node_uris, csg_reports, uncontrolled_cause):
         self.initial_cause = initial_cause
         self.root_cause = root_cause
         self.max_likelihood = max_likelihood
         self.cause_node_uris = cause_node_uris
         self.loopback_node_uris = loopback_node_uris
         self.csg_reports = csg_reports
-        self.uncontrolled_root_cause = uncontrolled_root_cause
+        self.uncontrolled_cause = uncontrolled_cause
 
     def __str__(self):
-        return "initial_cause: " + str(self.initial_cause) + " / root cause: " + str(self.root_cause) + " / max_likelihood: " + str(self.max_likelihood) + " / csg_reports: " + str(len(self.csg_reports)) + " / cause_node_uris: " + str(len(self.cause_node_uris)) + " / loopback_node_uris: " + str(len(self.loopback_node_uris)) + " / uncontrolled_root_cause: " + str(self.uncontrolled_root_cause)
+        return "initial_cause: " + str(self.initial_cause) + " / root cause: " + str(self.root_cause) + " / max_likelihood: " + str(self.max_likelihood) + " / csg_reports: " + str(len(self.csg_reports)) + " / cause_node_uris: " + str(len(self.cause_node_uris)) + " / loopback_node_uris: " + str(len(self.loopback_node_uris)) + " / uncontrolled_cause: " + str(self.uncontrolled_cause)
 
 class ControlStrategyReport():
     """Represents a Control Strategy Report."""
@@ -1221,10 +1264,10 @@ class ControlStrategyReport():
         else:
             if self.control_strategy.maximum_likelihood == self.misbehaviour.likelihood_number:
                 # this CSG is the one that brings the likelihood down
-                return "This is the cause of the reduction in likelihood"
+                return "This is a cause of the reduction in likelihood"
             elif self.control_strategy.maximum_likelihood < self.misbehaviour.likelihood_number:
                 # does more than needed, but something else brings likelihood up
-                return "Other higher likelihood causes take precedence"
+                return "There are other higher likelihood causes which define the risk"
             else:
                 # under controlled
                 return "Other lower likelihood causes are also required"
@@ -1399,7 +1442,6 @@ dm_risk_lookup = load_risk_lookup(domain_risk_lookup_filename)
 logging.info("Loading nq file...")
 timer = Timer()
 system_model = Graph(nq_filename)
-print(len(system_model))
 timer.log()
 
 
