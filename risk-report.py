@@ -350,9 +350,9 @@ class LogicalExpression():
     def uris(self):
         return set([URIRef(SYSTEM + "#" + str(symbol)) for symbol in self.cause.get_symbols()])
 
-    def pretty_print(self, max_complexity=30):
+    def pretty_print(self, max_complexity=500):
         if self.cause is None:
-            return "-None-"
+            return "None"
         cause_complexity = str(self.cause.args).count("Symbol")
         if cause_complexity <= max_complexity:
             cause = algebra.dnf(self.cause.simplify())
@@ -362,6 +362,17 @@ class LogicalExpression():
             cause = "Complexity: " + str(cause_complexity)
         return cause
 
+    @property
+    def dnf_terms(self):
+        if self.cause is None:
+            return []
+        dnf = algebra.dnf(self.cause.simplify())
+        # if dnf form is just 1 symbol or the operator is AND then just return it, otherwise it is an OR and we need to return its terms (args)
+        if len(dnf.symbols) == 1 or dnf.operator == "AND":
+            return [dnf]
+        else:
+            return dnf.args
+    
 class LoopbackError(Exception):
     """Exception raised when encountering an error during tree traversal."""
     def __init__(self, loopback_node_uris: set = None) -> None:
@@ -859,7 +870,7 @@ class Threat(Entity):
 
         # We need a different root cause definition to the meaning of the predicate added in the risk calculation
         # TODO: include secondary threats as well
-        is_root_cause = len(asserted_twas_levels) and parent_likelihood <= asserted_likelihood and not self.is_normal_op and asserted_likelihood > 0
+        is_root_cause = (len(asserted_twas_levels) > 0) and (parent_likelihood <= asserted_likelihood) and (not self.is_normal_op) and (asserted_likelihood > 0)
         if is_root_cause:
             logging.debug("    " * len(current_path) + "Threat is root cause")
             combined_root_cause = LogicalExpression([make_symbol(self.uriref)])
@@ -868,8 +879,8 @@ class Threat(Entity):
 
         # We need a different initial cause definition to the meaning of the predicate added in the risk calculation
         # TODO: include secondary threats as well? Probably aren't any though?
-        is_initial_cause = all([twas.is_external_cause for twas in self.trustworthiness_attribute_sets]) and self.is_normal_op
-        if is_initial_cause and parent_likelihood > 0:
+        is_initial_cause = all([twas.is_external_cause for twas in self.trustworthiness_attribute_sets]) and self.is_normal_op and (parent_likelihood > 0)
+        if is_initial_cause:
             logging.debug("    " * len(current_path) + "Threat is initial cause: " + str(self))
             combined_initial_cause = LogicalExpression([make_symbol(self.uriref)])
         else:
@@ -897,6 +908,8 @@ class Threat(Entity):
 
         # We actually need to look for uncontrolled trees, including any initial causes or threats in the normal-op graph.
         # Need to ignore things that are also not caused (0 likelihood, i.e. the inherent likelihood is zero, not because it was controlled).
+
+        # TODO: this lumps all causes (initial & root) into a single LE
 
         if len(csg_reports) > 0:
             # Special case: there are effective CSGs at self
@@ -1309,6 +1322,15 @@ class ControlStrategyReport():
                 control_strategy, residual_likelihood, residual_risk,
                 self.additional_comment()]
 
+    def csv_rows(self):
+        if self.root_cause is None:
+            yield self.csv_row()
+        else:
+            csgr = copy.copy(self)
+            for root_cause in self.root_cause.dnf_terms:
+                csgr.root_cause.cause = root_cause
+                yield csgr.csv_row()
+
 class Timer():
     def __init__(self):
         self.stime = time.perf_counter()
@@ -1478,7 +1500,8 @@ with open(output_filename, 'w', newline='') as file:
     writer.writerow(ControlStrategyReport.cvs_header())
     # Write each row
     for csg_report in all_csg_reports:
-        writer.writerow(csg_report.csv_row())
+        for row in csg_report.csv_rows():
+            writer.writerow(row)
 
 for threat in system_model.threats:
     logging.debug(str(threat))
