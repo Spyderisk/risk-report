@@ -33,7 +33,6 @@ from itertools import chain
 from pathlib import Path
 
 import boolean
-# from graphviz import Digraph
 from rdflib import ConjunctiveGraph, Literal, URIRef
 
 VERSION = "1.0"
@@ -45,31 +44,22 @@ logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 
 parser = argparse.ArgumentParser(description="Generate risk reports for Spyderisk system models",
                                  epilog="e.g. risk-report.py -i SteelMill.nq.gz -o steel.pdf -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60")
-parser.add_argument("-i", "--input", dest="input", required=False, metavar="input_NQ_filename", help="Filename of the validated system model NQ file (compressed or not)")
-parser.add_argument("-o", "--output", dest="output", required=False, metavar="output_csv_filename", help="Output CSV filename")
-parser.add_argument("-d", "--domain", dest="csvs", required=False, metavar="CSV_directory", help="Directory containing the domain model CSV files")
+parser.add_argument("-i", "--input", dest="input", required=True, metavar="input_NQ_filename", help="Filename of the validated system model NQ file (compressed or not)")
+parser.add_argument("-o", "--output", dest="output", required=True, metavar="output_csv_filename", help="Output CSV filename")
+parser.add_argument("-d", "--domain", dest="csvs", required=True, metavar="CSV_directory", help="Directory containing the domain model CSV files")
 parser.add_argument("-m", "--misbehaviour", dest="misbehaviours", required=False, nargs="+", metavar="URI_fragment", help="Target misbehaviour IDs, e.g. 'MS-LossOfControl-f8b49f60'")
 parser.add_argument("-s", "--simple-root-causes", dest="simple_root_causes", action="store_true", help="Keep the root causes simple (no top-level OR)")
+parser.add_argument("--hide-initial-causes", dest="hide_initial_causes", action="store_true", help="Don't output the initial causes")
 parser.add_argument("--version", action="version", version="%(prog)s " + VERSION)
 
 raw = parser.parse_args()
 args = vars(raw)
 
-# TODO: remove the defaults and make the arguments required
-# nq_filename = args["input"] or './example-models/small 2024-05-08T14_32.nq.gz'
-# csv_directory = args["csvs"] or  '../domain-network/csv/'
-# target_ms_ids = args["misbehaviours"] or ['MS-LossOfAvailability-c736a681']
-
-# nq_filename = args["input"] or './example-models/Steel Mill 2 blocks+ 2023-11-06T15_04.nq.gz'
-# csv_directory = args["csvs"] or  '../domain-network/csv/'
-
-nq_filename = args["input"] or './example-models/Steel Mill 1 block 2023-11-06T15_27.nq.gz'
-csv_directory = args["csvs"] or  '../domain-network/csv/'
-target_ms_ids = args["misbehaviours"] or ['MS-LossOfControl-f8b49f60']
+nq_filename = args["input"]
+csv_directory = args["csvs"]
+output_filename = args["output"]
 
 target_ms_uris = args["misbehaviours"]
-
-output_filename = args["output"] or 'output.csv'
 
 SHOW_LIKELIHOOD_IN_DESCRIPTION = False
 
@@ -1380,10 +1370,15 @@ class ControlStrategyReport():
 
     @classmethod
     def cvs_header(cls):
-        return ["Initial Cause", "Root Cause", "Intermediate Cause", "Consequence",
+        columns = ["Initial Cause", "Root Cause", "Intermediate Cause", "Consequence",
                 "Likelihood", "Impact", "Risk",
                 "Control", "Residual Likelihood", "Residual Risk", "Comment"]
 
+        if args["hide_initial_causes"]:
+            return columns[1:]
+        else:
+            return columns
+        
     def csv_row(self):
         initial = "None" if self.initial_cause is None else self.initial_cause.pretty_print()
         root = "None" if self.root_cause is None else self.root_cause.pretty_print()
@@ -1410,10 +1405,15 @@ class ControlStrategyReport():
             residual_likelihood = self.control_strategy.maximum_likelihood
             residual_risk = dm_risk_lookup[self.misbehaviour.impact_number][self.control_strategy.maximum_likelihood]
 
-        return [initial, root, intermediate, self.misbehaviour.comment,
+        columns = [initial, root, intermediate, self.misbehaviour.comment,
                 likelihood, impact, risk,
                 control_strategy, residual_likelihood, residual_risk,
                 self.additional_comment()]
+
+        if args["hide_initial_causes"]:
+            return columns[1:]
+        else:
+            return columns
 
     # def csv_rows(self):
     #     if self.root_cause is None:
