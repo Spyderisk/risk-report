@@ -324,7 +324,7 @@ class LogicalExpression():
 
     @classmethod
     def create_or_none(cls, cause_list, all_required=True):
-        """Factory method to create a LogicalExpression or return None is the cause_list is empty after filtering out None values"""
+        """Factory method to create a LogicalExpression or return None if the cause_list is empty after filtering out None values"""
         cause_list = [cause for cause in cause_list if cause is not None]
         if len(cause_list) == 0:
             return None
@@ -896,8 +896,8 @@ class Threat(Entity):
                 max_likelihood=0,
                 initial_cause=None,
                 root_cause=None,
-                uncontrolled_root_cause=None,
                 uncontrolled_initial_cause=None,
+                uncontrolled_root_cause=None,
                 cause_node_uris=combined_cause_node_uris,
                 loopback_node_uris=combined_loopback_node_uris,
                 csg_reports=set()
@@ -976,8 +976,6 @@ class Threat(Entity):
         # We actually need to look for uncontrolled trees, including any initial causes or threats in the normal-op graph.
         # Also need to ignore things that are not caused (0 likelihood, i.e. the inherent likelihood is zero, not because it was controlled). That's handled by returning early above when combined_max_likelihood == 0
 
-        # TODO: this lumps all causes (initial & root) into a single LE
-
         combined_uncontrolled_initial_cause = LogicalExpression.create_or_none([parent.uncontrolled_initial_cause for parent in parent_return_values], all_required=True)
         combined_uncontrolled_root_cause = LogicalExpression.create_or_none([parent.uncontrolled_root_cause for parent in parent_return_values], all_required=True)
 
@@ -987,30 +985,28 @@ class Threat(Entity):
             combined_uncontrolled_root_cause = None
             logging.debug("    " * len(current_path) + "Threat has an effective CSG => no uncontrolled cause")
         else:
+            # Normal case: there are no effective CSGs at self
+            # For each parent, it is uncontrolled if the initial_cause or root_cause is uncontrolled (they are both facets of the same thing).
+            # A parent is controlled therefore if both the initial_cause and root_cause are controlled, i.e. both None.
+            # If any parent is controlled then this Threat is controlled.
+            controlled = False
+            for parent in parent_return_values:
+                # If a parent is a Misbehaviour at the top of the tree then uncontrolled_initial_cause is None, but it *is* uncontrolled really, we just don't want to add the Misbehaviour to the uncontrolled_initial_cause expression
+                # Therefore check that len(parent_cause_node_uris) is greater than 1
+                if parent.uncontrolled_initial_cause is None and parent.uncontrolled_root_cause is None and len(parent.cause_node_uris) > 1:
+                    controlled = True
+                    break
+            if controlled:
+                logging.debug("    " * len(current_path) + "Threat has 1 or more controlled parents => no uncontrolled cause")
+                combined_uncontrolled_initial_cause = None
+                combined_uncontrolled_root_cause = None
+
             if is_initial_cause:
                 logging.debug("    " * len(current_path) + "Using self as uncontrolled initial cause")
                 combined_uncontrolled_initial_cause = LogicalExpression([make_symbol(self.uriref)])
             elif is_root_cause:
                 logging.debug("    " * len(current_path) + "Using self as uncontrolled root cause")
                 combined_uncontrolled_root_cause = LogicalExpression([make_symbol(self.uriref)])
-            # else:
-            #     # General case, asssume controlled unless we find otherwise
-            #     controlled = False
-            #     for parent in parent_return_values:
-            #         # If a parent is a Misbehaviour at the top of the tree then uncontrolled_initial_cause is None, but it is uncontrolled really, we just don't want to add the Misbehaviour to the uncontrolled_initial_cause expression
-            #         if parent.uncontrolled_initial_cause is None and len(parent.cause_node_uris) > 1:
-            #             controlled = True
-            #             break
-            #     if controlled:
-            #         logging.debug("    " * len(current_path) + "Threat has 1 or more controlled parents => no uncontrolled cause")
-            #         combined_uncontrolled_initial_cause = None
-            #         combined_uncontrolled_root_cause = None
-            #     else:
-            #         logging.debug("    " * len(current_path) + "Threat has no controlled parents => uncontrolled cause")
-            #         # if combined_uncontrolled_initial_cause is None:
-            #         #     raise Exception("Threat has no controlled parents but has no uncontrolled initial cause")
-            #         # if combined_uncontrolled_root_cause is None:
-            #         #     raise Exception("Threat has no controlled parents but has no uncontrolled root cause")
 
         # Combine all the CSG reports from the parents and add in any from this Threat:
         combined_csg_reports |= csg_reports
@@ -1233,14 +1229,14 @@ class MisbehaviourSet(Entity):
             logging.debug("    " * len(current_path) + "Misbehaviour has no causes: " + str(self))
             # Return minimal explanation:
             return Explanation(
+                max_likelihood=0,
                 initial_cause=None,
                 root_cause=None,
-                max_likelihood=self.likelihood_number,
+                uncontrolled_initial_cause=None,
+                uncontrolled_root_cause=None,
                 cause_node_uris=set([self.uriref]),
                 loopback_node_uris=set(),
-                csg_reports=set(),
-                uncontrolled_initial_cause=None,
-                uncontrolled_root_cause=None
+                csg_reports=set()
             )
 
         # Combine and return undiscarded parent return values (could be none) =>
