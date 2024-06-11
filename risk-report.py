@@ -722,6 +722,18 @@ class Threat(Entity):
         return [self.graph.misbehaviour(ms_uriref) for ms_uriref in ms_urirefs]
 
     @property
+    def primary_threat_twas_ms(self):
+        """Get all the (TWAS, MisbehaviourSets) that can cause this Threat (disregarding likelihoods), for primary Threat types"""
+        twas_ms = []
+        entry_points = self.graph.objects(self.uriref, HAS_ENTRY_POINT)
+        for twas_uriref in entry_points:
+            twas = self.graph.trustworthiness_attribute_set(twas_uriref)
+            twis = self.graph.value(predicate=AFFECTS, object=twas_uriref)
+            ms = self.graph.misbehaviour(self.graph.value(twis, AFFECTED_BY))
+            twas_ms.append((twas, ms))
+        return twas_ms
+
+    @property
     def secondary_threat_misbehaviour_parents(self):
         """Get all the Misbehaviours that can cause this Threat (disregarding likelihoods), for secondary Threat types"""
         ms_urirefs = self.graph.objects(self.uriref, HAS_SECONDARY_EFFECT_CONDITION)
@@ -731,6 +743,14 @@ class Threat(Entity):
     def misbehaviour_parents(self):
         """Get all the Misbehaviours that can cause this Threat (disregarding likelihoods), for all Threat types"""
         return self.primary_threat_misbehaviour_parents + self.secondary_threat_misbehaviour_parents
+
+    @property
+    def twas_ms_parents(self):
+        p = self.primary_threat_twas_ms
+        s = self.secondary_threat_misbehaviour_parents
+        for ms in s:
+            p.append((None, ms))
+        return p
 
     @property
     def control_strategies(self, future_risk=True):
@@ -783,9 +803,9 @@ class Threat(Entity):
         # Put the returned tuples in parent_return_values
         # A Threat requires all of its causes to be on good paths
         parent_return_values = []
-        parents = self.misbehaviour_parents
+        twas_ms_parents = self.twas_ms_parents
 
-        if len(parents) == 0:
+        if len(twas_ms_parents) == 0:
             # this shouldn't happen
             raise Exception("Threat has no parents")
 
@@ -805,10 +825,20 @@ class Threat(Entity):
         # We only need one error to know we should throw an exception, but examining all paths will find all loopback nodes and may make the cached result more useful.
         combined_loopback_node_uris = set()
         throw_error = False
-        for ms in parents:
+        for (twas, ms) in twas_ms_parents:
             if ms.uriref not in current_path:
                 try:
-                    parent_return_values.append(ms.explain_likelihood(current_path))  # may throw an exception
+                    parent_return_value = ms.explain_likelihood(current_path)  # may throw an exception
+                    parent_return_values.append(parent_return_value)
+                    # calculate max_likelihood of the parent, taking into account the TWAS if there is one
+                    if twas is not None:
+                        # Potentially increase the likelihood if the TWAS asseted trustworthiness level is low.
+                        # This happens for instance when a threat has "NetworkUserTW of Internet" as a TWAS which is asserted to be level 0 (implying level 5 likelihood),
+                        # the causing MS is "Internet loses Network User Trustworthiness" and that has max likelihood 0
+                        twas_ms_likelihood = max(parent_return_value.max_likelihood, inverse(twas.asserted_level_number))
+                        if twas_ms_likelihood != parent_return_value.max_likelihood:
+                            logging.debug("    " * len(current_path) + " - ms.max_likelihood: " + str(parent_return_value.max_likelihood) + " / twas.asserted_level_number: " + str(twas.asserted_level_number) + " => " + str(twas_ms_likelihood))
+                            parent_return_value.max_likelihood = twas_ms_likelihood
                 except LoopbackError as error:
                     logging.debug("    " * len(current_path) + "Error: parent Misbehaviour cannot be caused: " + str(ms.uriref))
                     combined_loopback_node_uris |= error.loopback_node_uris
@@ -829,10 +859,6 @@ class Threat(Entity):
         #   For a secondary threat it's the minimum likelihood of the causal misbehaviours (secondary effect conditions).
         #   We need to take into account that threats can have mixed causes (so can be both "primary" and "secondary"). The minimum likelihood of these causes is used.
 
-        logging.debug("    " * len(current_path) + "Trustworthiness Attribute Sets:")
-        for twas in self.trustworthiness_attribute_sets:
-            logging.debug("    " * len(current_path) + " - TWAS: " + twas.comment + ", likelihood (asserted/inferred) " + str(twas.asserted_level_number) + " / " + str(twas.inferred_level_number))
-
         inferred_twas_trustworthiness_levels = [twas.inferred_level_number for twas in self.trustworthiness_attribute_sets]
         inferred_twas_likelihoods = [inverse(level) for level in inferred_twas_trustworthiness_levels]
         if len(inferred_twas_likelihoods) > 0:
@@ -840,27 +866,23 @@ class Threat(Entity):
         else:
             inferred_twas_likelihood = 9999
 
-        logging.debug("    " * len(current_path) + "Secondary threat causes:")
-        for ms in self.secondary_threat_misbehaviour_parents:
-            logging.debug("    " * len(current_path) + " - Misbehaviour: " + ms.label + ", likelihood " + str(ms.likelihood_number))
-
         secondary_parent_misbehaviour_likelihoods = [ms.likelihood_number for ms in self.secondary_threat_misbehaviour_parents]
         if len(secondary_parent_misbehaviour_likelihoods) > 0:
             secondary_parent_misbehaviour_likelihood = min(secondary_parent_misbehaviour_likelihoods)  # take min() as this is a threat
         else:
             secondary_parent_misbehaviour_likelihood = 9999
 
+        # need this and the supporting input to see if it is a root cause
         parent_likelihood = min(inferred_twas_likelihood, secondary_parent_misbehaviour_likelihood)  # take min() as all causes are needed
 
         # TODO: add in threat frequency
 
-        logging.debug("    " * len(current_path) + "Likelihoods: inv(TWAS) " + str(inferred_twas_likelihoods) + " => " + str(inferred_twas_likelihood) + " / Secondary " + str(secondary_parent_misbehaviour_likelihoods) + " => " + str(secondary_parent_misbehaviour_likelihood) + " / Result " + str(parent_likelihood))
+        logging.debug("    " * len(current_path) + "Parent likelihoods: " + str([ret.max_likelihood for ret in parent_return_values]))
 
         combined_cause_node_uris = set().union(*[ret.cause_node_uris for ret in parent_return_values])
         combined_cause_node_uris.add(self.uriref)
 
         combined_max_likelihood = min([ret.max_likelihood for ret in parent_return_values])  # take min() as this is a threat
-        combined_max_likelihood = max(combined_max_likelihood, parent_likelihood)  # take max() as we are combining two options
 
         combined_csg_reports = set().union(*[ret.csg_reports for ret in parent_return_values])
 
@@ -1288,8 +1310,8 @@ class MisbehaviourSet(Entity):
             cause_node_uris=combined_cause_node_uris,
             loopback_node_uris=combined_loopback_node_uris,
             csg_reports=combined_csg_reports,
-            uncontrolled_root_cause=combined_uncontrolled_root_cause,
-            uncontrolled_initial_cause=combined_uncontrolled_initial_cause
+            uncontrolled_initial_cause=combined_uncontrolled_initial_cause,
+            uncontrolled_root_cause=combined_uncontrolled_root_cause
         )
 
 class Explanation:
