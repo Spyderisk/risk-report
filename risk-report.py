@@ -1154,13 +1154,17 @@ class MisbehaviourSet(Entity):
 
         # Basically, we have to block the search in the same places, and can't block it in new places.
 
-        for index, explanation in enumerate(self.likelihood_explanations):
-            if len(explanation.loopback_node_uris.intersection(current_path)) == len(explanation.loopback_node_uris) and len(explanation.cause_node_uris.intersection(current_path)) == 0:
-                logging.debug("    " * (len(current_path) + 1) + f"Reusing cached explanation {index}: {explanation}")
-                return explanation
+        explanation = None
+
+        for index, cached_explanation in enumerate(self.likelihood_explanations):
+            if len(cached_explanation.loopback_node_uris.intersection(current_path)) == len(cached_explanation.loopback_node_uris) and len(cached_explanation.cause_node_uris.intersection(current_path)) == 0:
+                logging.debug("    " * (len(current_path) + 1) + f"Reusing cached explanation {index}: {cached_explanation}")
+                explanation = cached_explanation
+                break
 
         # TODO: should be able to also cache failures (in Threat caching as well)
 
+        if explanation is None:
         # If there was nothing in the cache we can use, do the calculation and save the result before returning it
         explanation = self._explain_likelihood(current_path)
         logging.debug("    " * (len(current_path) + 1) + f"New explanation {len(self.likelihood_explanations)}: {explanation}")
