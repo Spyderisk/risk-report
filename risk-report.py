@@ -517,7 +517,7 @@ class ControlStrategy(Entity):
         return asset_urirefs
 
     def control_set_asset_labels(self):
-        return sorted([self.graph.label(asset_uriref) for asset_uriref in self.control_set_asset_urirefs()])
+        return sorted(list(set([self.graph.label(asset_uriref) for asset_uriref in self.control_set_asset_urirefs()])))
 
 class TrustworthinessAttributeSet(Entity):
     """Represents a Trustworthiness Attribute Set."""
