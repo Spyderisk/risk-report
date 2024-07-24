@@ -1165,10 +1165,10 @@ class MisbehaviourSet(Entity):
         # TODO: should be able to also cache failures (in Threat caching as well)
 
         if explanation is None:
-        # If there was nothing in the cache we can use, do the calculation and save the result before returning it
-        explanation = self._explain_likelihood(current_path)
-        logging.debug("    " * (len(current_path) + 1) + f"New explanation {len(self.likelihood_explanations)}: {explanation}")
-        self.likelihood_explanations.append(explanation)
+            # If there was nothing in the cache we can use, do the calculation and save the result before returning it
+            explanation = self._explain_likelihood(current_path)
+            logging.debug("    " * (len(current_path) + 1) + f"New explanation {len(self.likelihood_explanations)}: {explanation}")
+            self.likelihood_explanations.append(explanation)
 
         # If we are not the first node in the tree then return the (from-cached or newly-saved) explanation.
         # Otherwise, return a copy off all the csg_reports, adding in another one if there is an uncontrolled_initial_cause or uncontrolled_root_cause
@@ -1606,12 +1606,12 @@ with open(output_filename, 'w', newline='') as file:
     for csg_report in all_csg_reports:
         writer.writerow(csg_report.csv_row())
 
-for threat in system_model.threats:
-    logging.debug(str(threat))
-    for explanation in threat.likelihood_explanations:
-        logging.debug("    " + str(explanation))
+# for threat in system_model.threats:
+#     logging.debug(str(threat))
+#     for explanation in threat.likelihood_explanations:
+#         logging.debug("    " + str(explanation))
 
-for ms in system_model.misbehaviours:
-    logging.debug(str(ms))
-    for explanation in ms.likelihood_explanations:
-        logging.debug("    " + str(explanation))
+# for ms in system_model.misbehaviours:
+#     logging.debug(str(ms))
+#     for explanation in ms.likelihood_explanations:
+#         logging.debug("    " + str(explanation))
