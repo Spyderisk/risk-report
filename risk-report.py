@@ -446,6 +446,14 @@ class Entity():
     def __init__(self, uriref, graph):
         self.uriref = uriref
         self.graph = graph
+    
+    def __hash__(self):
+        return hash(self.uriref)
+
+    def __eq__(self, other):
+        if not isinstance(other, Entity):
+            return False
+        return (self.uriref == other.uriref)
 
 class ControlStrategy(Entity):
     """Represents a Control Strategy."""
@@ -1348,7 +1356,7 @@ class ControlStrategyReport():
         self.root_cause = root_cause
         # the initial cause as a logical expression
         self.initial_cause = initial_cause
-        # the intermediate cause threat as a logical expression - this is the threat that the CSG is addressing
+        # the intermediate cause threat - this is the threat that the CSG is addressing
         self.intermediate_cause = intermediate_cause
         # the MisbehaviourSet that was being analysed when this CSG was found
         self.misbehaviour = misbehaviour
@@ -1415,7 +1423,7 @@ class ControlStrategyReport():
         if self.intermediate_cause is None:
             intermediate = "None"
         else:
-            intermediate = self.intermediate_cause.comment
+            intermediate = self.intermediate_cause.description
             # if self.root_cause.pretty_print() == self.intermediate_cause.comment:
             #     intermediate = ""
             if self.intermediate_cause.is_normal_op:
