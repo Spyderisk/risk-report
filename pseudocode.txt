@@ -1,46 +1,46 @@
 Recursive sequence:
 
 
-Explain(L(M1), global_target=3):
-  Explain(L(T1), global_target=3):
-    Explain(L(M2), global_target=3):
-      Explain(L(T2), global_target=3):
-        input L = 3 (that which is due to parent causes)
-        input L > L so check CSGs (as something has reduced it):
-          inv(E(CSG5)) == 4 which > input L so is ineffective (4 > 3)
-          inv(E(CSG4)) == 3 which == input L (so is not currently doing anything) and == global_target L (so contributes to the effect)
+Explain(L(M1), target_misbehaviour_likelihood=3):
+  Explain(L(T1), target_misbehaviour_likelihood=3):
+    Explain(L(M2), target_misbehaviour_likelihood=3):
+      Explain(L(T2), target_misbehaviour_likelihood=3):
+        parent_likelihood = 3 (that which is due to parent causes)
+        parent_likelihood > L so check CSGs (as something has reduced it):
+          inv(E(CSG5)) == 4 which > parent_likelihood so is ineffective (4 > 3)
+          inv(E(CSG4)) == 3 which == parent_likelihood (so is not currently doing anything) and == target_misbehaviour_likelihood L (so contributes to the effect)
             Return: CSG4 @ T2 => L3 from L3 but is "does not let likelihood exceed current value"
-          inv(E(CSG1)) == 2 which < input L (so is doing something) and <= global_target L (so worth mentioning) and < global_target (so is doing more than needed)
+          inv(E(CSG1)) == 2 which < parent_likelihood (so is doing something) and <= target_misbehaviour_likelihood L (so worth mentioning) and < target_misbehaviour_likelihood (so is doing more than needed)
             Return: CSG1 @ T2 => L2 from L3 but "other higher likelihood causes take precedence when determining effects"
-        Explain(L(M3), global_target=3):
-          Explain(L(T4), global_target=3):
-            input L = 5
-            input L > L so check CSGs
-              inv(E(CSG0)) = 3 which < input L (so is doing something) and == global_target (so contributes to the effect)
+        Explain(L(M3), target_misbehaviour_likelihood=3):
+          Explain(L(T4), target_misbehaviour_likelihood=3):
+            parent_likelihood = 5
+            parent_likelihood > L so check CSGs
+              inv(E(CSG0)) = 3 which < parent_likelihood (so is doing something) and == target_misbehaviour_likelihood (so contributes to the effect)
                 Return: CSG0 @ T4 => L3 from L5
-            Explain(L(M3), global_target=3):
+            Explain(L(M3), target_misbehaviour_likelihood=3):
               Explain(L(R1)):
-                input L = 5 (no causes)
-                input L == L so don't check CSGs
+                parent_likelihood = 5 (no causes)
+                parent_likelihood == L so don't check CSGs
                 no causes
                   Return: cause is R1
       Explain(L(T3)):
-        input L = 4
-        input L > L so check CSGs
-          inv(E(CSG2)) == 3 which < input L (so is doing something) and == global_target L (so contributes to the effect)
+        parent_likelihood = 4
+        parent_likelihood > L so check CSGs
+          inv(E(CSG2)) == 3 which < parent_likelihood (so is doing something) and == target_misbehaviour_likelihood L (so contributes to the effect)
             Return: CSG2 @ T3 => L3 from L4
         Explain(L(M4)):
           Explain(L(R2)):
-            input L = 2 (no causes)
-            input L == L so don't check CSGs
+            parent_likelihood = 2 (no causes)
+            parent_likelihood == L so don't check CSGs
             no causes
               Return: cause is R2
         Return: cause = R2; CSGs = [CSG2 @ T3 => L3 from L4]
     Explain(L(M5)):
       Explain(L(R3)):
-        input L = 5 (no causes)
-        input L < L so check CSGs
-          inv(E(CSG3)) = 4 which < input L (so it doing something) and > global_target (so something else is doing more)
+        parent_likelihood = 5 (no causes)
+        parent_likelihood < L so check CSGs
+          inv(E(CSG3)) = 4 which < parent_likelihood (so it doing something) and > target_misbehaviour_likelihood (so something else is doing more)
             Return: CSG3 @ R3 => L4 from L5 but "other lower likelihood causes are also required"
         no causes:
           Return: root cause is R3
@@ -71,12 +71,12 @@ Explain(T, path_set):
   add T to path_set
   Find all parent M, excluding any we have already visited on this path
   if there are parents:
-    input_L = (min(parent likelihoods))
+    parent_likelihood = (min(parent_controlled_likelihoods))
   else:
     # it is an initial cause
     find all parent TWA and make list of TW_levels
-    input_L = (min(inv(TW_levels)))
-  if input_L > L(T) then for CSG in CSGs:
+    parent_likelihood = (min(inv(TW_levels)))
+  if parent_likelihood > L(T) then for CSG in CSGs:
     make CSG objects
   if there are parents then for M in parents:
     if M not in path_set:
@@ -89,23 +89,23 @@ Explain(T, path_set):
 
 
 There are five CSG classes:
-    if inv(E(CSG)) > input L:
+    if inv(E(CSG)) > parent_likelihood:
         - ineffective (do not report these)
-    else if inv(E(CSG)) == input L:
+    else if inv(E(CSG)) == parent_likelihood:
         - backstop (would help if something upstream was not there) ("is not reducing likelihood but does not let likelihood exceed current value")
     else:
-        if inv(E(CSG)) == global_target:
+        if inv(E(CSG)) == target_misbehaviour_likelihood:
             - normal
-        else if inv(E(CSG)) < global_target:
+        else if inv(E(CSG)) < target_misbehaviour_likelihood:
             - over controlled ("other higher likelihood causes take precedence")
         else:
             - under controlled ("other lower likelihood causes are also required")
 
-Crucially, we want to report all those where inv(E(CSG)) <= input L, which we can determine without knowing global_target.
+Crucially, we want to report all those where inv(E(CSG)) <= parent_likelihood, which we can determine without knowing target_misbehaviour_likelihood.
 Therefore, we can choose how to report the CSGs at the end of the process.
 => we need to be able to query E(CSG)
 
-Have a CSG object
+Have a CSG report object
   stores/accesses the info needed to make a line in the report
     the CSG itself
       threat it is located at
@@ -115,3 +115,239 @@ Have a CSG object
     uncontrolled likelihood of the Threat
   
   Can I use a memoize() function for caching? (https://docs.python.org/3/library/functools.html#functools.cache)
+
+At each node we need:
+  max_likelihood
+    - the likelihood we'd have if nothing was controlled
+    - the combination of the uncontrolled root cause likelihoods
+    - (could derive it from the root cause LE but simpler to just do it as we recurse)
+  parent_controlled_likelihoods
+    - likelihood taking into account the upstream CSGs
+    - this is not just the already computed likelihood because it is before the CSG application
+  controlled_likelihood (turns into the parent_likelihood for its children)
+
+When looking at uncontrolled_root_causes, we actually need to look at uncontrolled causes: it doesn't matter if the CSG is in the normal-ops graph.
+In addition, an uncontrolled cause must also be a *cause* so max_likelihood > 0: if something is uncontrolled but not going to happen anyway, then we don't care.
+
+Also need to make sure we are dealing with causes elsewhere. A node could be:
+  - max_likelihood > 0
+    - has some effective CSGs in tree => controlled cause
+    - has no effective CSGs in tree => uncontrolled cause
+  - max_likelihood == 0
+    - if all are like this at a MS then MS can never be a cause
+    - if any are like this at a Threat then
+      - if the asserted TWA are safe the Threat can never be a cause
+    - just return minimal Explanation
+
+----
+2024-06-05
+
+small-1-secure-router.nq.gz
+  - two paths via routers from internet to data, one router has secure config, the other not
+  - analysis in small-1-secure-router.1.csv seems fine
+small-2-secure-router.nq.gz
+  - two paths via routers from internet to data, both routers have secure Config
+  - analysis in small-2-secure-router.1.csv seems fine
+small-1-secure-router-2.nq.gz
+  - adds FWBlock at "[Interface:Router1-Internet]"
+  - the analysis in small-1-secure-router-2.1.csv does NOT mention router1 and the firewall block!
+  - log in small-1-secure-router-2.1.log
+  - was this re-risk calculated?!
+
+2024-06-10
+
+small-2-secure-router-2.nq.gz
+  - adds FWBlock at "[Interface:Router2-Internet]"
+  ./risk-report.py -i example-models/small-2-secure-router-2.nq.gz -o small-2-secure-router-2.1.csv -d ../domain-network/csv/ |& tee small-2-secure-router-2.1.log
+  - no FWBlock in the CSV
+
+2024-06-10
+
+re-ran last test but listing discarded CSG reports where max likelihood of threat is 0
+
+See this:
+
+Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfNetworkUserTW-985252d
+    Misbehaviour has no causes: Misbehaviour: "Internet" loses Network User Trustworthiness (http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfNetworkUserTW-985252d)
+    New explanation 0: initial_cause: None / root cause: None / max_likelihood: 0 / csg_reports: 0 / cause_node_uris: 1 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+
+perhaps that's okay - seems to check out, but is the threat looking at the consequence likelihood over the actual network user TW TWA level?
+
+DEBUG:                                                                            Explaining Threat: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#H.V.IoH.3-MP-IoH_985252d_a9ac9140_c56fd826_9b870c51_985252d_e3f7dcf0
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfNetworkUserTW-985252d
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: None / root cause: None / max_likelihood: 0 / csg_reports: 0 / cause_node_uris: 1 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-ConnectionsAllowed-9b870c51
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: AND(Host "Router2" in service, Subnet "Internet" in service) / root cause: None / max_likelihood: 5 / csg_reports: 1 / cause_node_uris: 10 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfExtrinsic-AU-TW-c56fd826
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Vulnerability (AU) discovered at "Router2" / root cause: None / max_likelihood: 2 / csg_reports: 0 / cause_node_uris: 3 / loopback_node_uris: 0 / uncontrolled_initial_cause: Vulnerability (AU) discovered at "Router2" / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfExtrinsic-VN-TW-c56fd826
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Vulnerability (VN) discovered at "Router2" / root cause: None / max_likelihood: 2 / csg_reports: 0 / cause_node_uris: 3 / loopback_node_uris: 0 / uncontrolled_initial_cause: Vulnerability (VN) discovered at "Router2" / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-ConnectionsAllowed-e3f7dcf0
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Network path across "Internet" enters service / root cause: None / max_likelihood: 5 / csg_reports: 0 / cause_node_uris: 5 / loopback_node_uris: 0 / uncontrolled_initial_cause: Network path across "Internet" enters service / uncontrolled_root_cause: None
+DEBUG:                                                                                Likelihoods: inv(TWAS) [5, 0, 2, 2, 5] => 0 / Secondary [] => 9999 / Result 0
+DEBUG:                                                                                Threat has zero max likelihood so cannot be the cause of anything
+DEBUG:                                                                                Discarding 1 CSG reports
+DEBUG:                                                                                 - Control Strategy Report: [Control Strategy: Block Interface ("[Interface:Router2-Internet]") (http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#CSG-BlockInterface_M_3b37a036) / Effectiveness: 5 / Max Likelihood: 0] / [Initial Cause: AND(Host "Router2" in service, Subnet "Internet" in service)] / [Root Cause: None] / [Intermediate Cause: Threat: Access to "Router2" from "Internet" enabled (http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#I.DA.I.8-MP-I_c56fd826_9b870c51_985252d)] / Uncontrolled Likelihood: 5 / Misbehaviour Set: None
+DEBUG:                                                                                New explanation 0: initial_cause: None / root cause: None / max_likelihood: 0 / csg_reports: 0 / cause_node_uris: 19 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+
+Added more debugging for TWAS levels:
+
+DEBUG:                                                                            Explaining Threat: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#H.V.IoH.3-MP-IoH_985252d_a9ac9140_c56fd826_9b870c51_985252d_e3f7dcf0
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfNetworkUserTW-985252d
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: None / root cause: None / max_likelihood: 0 / csg_reports: 0 / cause_node_uris: 1 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-ConnectionsAllowed-9b870c51
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: AND(Host "Router2" in service, Subnet "Internet" in service) / root cause: None / max_likelihood: 5 / csg_reports: 1 / cause_node_uris: 10 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfExtrinsic-AU-TW-c56fd826
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Vulnerability (AU) discovered at "Router2" / root cause: None / max_likelihood: 2 / csg_reports: 0 / cause_node_uris: 3 / loopback_node_uris: 0 / uncontrolled_initial_cause: Vulnerability (AU) discovered at "Router2" / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfExtrinsic-VN-TW-c56fd826
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Vulnerability (VN) discovered at "Router2" / root cause: None / max_likelihood: 2 / csg_reports: 0 / cause_node_uris: 3 / loopback_node_uris: 0 / uncontrolled_initial_cause: Vulnerability (VN) discovered at "Router2" / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-ConnectionsAllowed-e3f7dcf0
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Network path across "Internet" enters service / root cause: None / max_likelihood: 5 / csg_reports: 0 / cause_node_uris: 5 / loopback_node_uris: 0 / uncontrolled_initial_cause: Network path across "Internet" enters service / uncontrolled_root_cause: None
+DEBUG:                                                                                Trustworthiness Attribute Sets:
+DEBUG:                                                                                 - TWAS: NetworkUserTW, likelihood 0 / 0
+DEBUG:                                                                                 - TWAS: ConnectionsBlocked, likelihood 5 / 5
+DEBUG:                                                                                 - TWAS: Extrinsic-AU-TW, likelihood 5 / 3
+DEBUG:                                                                                 - TWAS: Extrinsic-VN-TW, likelihood 5 / 3
+DEBUG:                                                                                 - TWAS: ConnectionsBlocked, likelihood 5 / 0
+DEBUG:                                                                                Likelihoods: inv(TWAS) [5, 0, 2, 2, 5] => 0 / Secondary [] => 9999 / Result 0
+DEBUG:                                                                                Threat has zero max likelihood so cannot be the cause of anything
+DEBUG:                                                                                Discarding 1 CSG reports
+DEBUG:                                                                                 - Control Strategy Report: [Control Strategy: Block Interface ("[Interface:Router2-Internet]") (http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#CSG-BlockInterface_M_3b37a036) / Effectiveness: 5 / Max Likelihood: 0] / [Initial Cause: AND(Host "Router2" in service, Subnet "Internet" in service)] / [Root Cause: None] / [Intermediate Cause: Threat: Access to "Router2" from "Internet" enabled (http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#I.DA.I.8-MP-I_c56fd826_9b870c51_985252d)] / Uncontrolled Likelihood: 5 / Misbehaviour Set: None
+DEBUG:                                                                                New explanation 0: initial_cause: None / root cause: None / max_likelihood: 0 / csg_reports: 0 / cause_node_uris: 19 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+
+More debugging:
+
+DEBUG:                                                                            Explaining Threat: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#H.V.IoH.3-MP-IoH_985252d_a9ac9140_c56fd826_9b870c51_985252d_e3f7dcf0 (Remote anonymous exploit on device "Router2" from "Internet" via "Internet")
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfNetworkUserTW-985252d ("Internet" loses Network User Trustworthiness)
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: None / root cause: None / max_likelihood: 0 / csg_reports: 0 / cause_node_uris: 1 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-ConnectionsAllowed-9b870c51 (Connections Allowed at [Interface:Router2-Internet])
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: AND(Host "Router2" in service, Subnet "Internet" in service) / root cause: None / max_likelihood: 5 / csg_reports: 1 / cause_node_uris: 10 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfExtrinsic-AU-TW-c56fd826 ("Router2" loses Extrinsic-AU-Trustworthiness)
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Vulnerability (AU) discovered at "Router2" / root cause: None / max_likelihood: 2 / csg_reports: 0 / cause_node_uris: 3 / loopback_node_uris: 0 / uncontrolled_initial_cause: Vulnerability (AU) discovered at "Router2" / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfExtrinsic-VN-TW-c56fd826 ("Router2" loses Extrinsic-VN-Trustworthiness)
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Vulnerability (VN) discovered at "Router2" / root cause: None / max_likelihood: 2 / csg_reports: 0 / cause_node_uris: 3 / loopback_node_uris: 0 / uncontrolled_initial_cause: Vulnerability (VN) discovered at "Router2" / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-ConnectionsAllowed-e3f7dcf0 (Connections Allowed at [NetworkPath:Internet])
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Network path across "Internet" enters service / root cause: None / max_likelihood: 5 / csg_reports: 0 / cause_node_uris: 5 / loopback_node_uris: 0 / uncontrolled_initial_cause: Network path across "Internet" enters service / uncontrolled_root_cause: None
+DEBUG:                                                                                Trustworthiness Attribute Sets:
+DEBUG:                                                                                 - TWAS: NetworkUserTW, likelihood (asserted/inferred) 0 / 0
+DEBUG:                                                                                 - TWAS: ConnectionsBlocked, likelihood (asserted/inferred) 5 / 5
+DEBUG:                                                                                 - TWAS: Extrinsic-AU-TW, likelihood (asserted/inferred) 5 / 3
+DEBUG:                                                                                 - TWAS: Extrinsic-VN-TW, likelihood (asserted/inferred) 5 / 3
+DEBUG:                                                                                 - TWAS: ConnectionsBlocked, likelihood (asserted/inferred) 5 / 0
+DEBUG:                                                                                Secondary threat causes:
+DEBUG:                                                                                Likelihoods: inv(TWAS) [5, 0, 2, 2, 5] => 0 / Secondary [] => 9999 / Result 0
+DEBUG:                                                                                Threat has zero max likelihood so cannot be the cause of anything
+DEBUG:                                                                                Discarding 1 CSG reports
+DEBUG:                                                                                 - Control Strategy Report: [Control Strategy: Block Interface ("[Interface:Router2-Internet]") (http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#CSG-BlockInterface_M_3b37a036) / Effectiveness: 5 / Max Likelihood: 0] / [Initial Cause: AND(Host "Router2" in service, Subnet "Internet" in service)] / [Root Cause: None] / [Intermediate Cause: Threat: Access to "Router2" from "Internet" enabled (http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#I.DA.I.8-MP-I_c56fd826_9b870c51_985252d)] / Uncontrolled Likelihood: 5 / Misbehaviour Set: None
+DEBUG:                                                                                New explanation 0: initial_cause: None / root cause: None / max_likelihood: 0 / csg_reports: 0 / cause_node_uris: 19 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+
+More:
+
+DEBUG:                                                                            Explaining Threat: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#H.V.IoH.3-MP-IoH_985252d_a9ac9140_c56fd826_9b870c51_985252d_e3f7dcf0 (Remote anonymous exploit on device "Router2" from "Internet" via "Internet")
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfNetworkUserTW-985252d ("Internet" loses Network User Trustworthiness)
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: None / root cause: None / max_likelihood: 0 / csg_reports: 0 / cause_node_uris: 1 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-ConnectionsAllowed-9b870c51 (Connections Allowed at [Interface:Router2-Internet])
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: AND(Host "Router2" in service, Subnet "Internet" in service) / root cause: None / max_likelihood: 5 / csg_reports: 1 / cause_node_uris: 10 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfExtrinsic-AU-TW-c56fd826 ("Router2" loses Extrinsic-AU-Trustworthiness)
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Vulnerability (AU) discovered at "Router2" / root cause: None / max_likelihood: 2 / csg_reports: 0 / cause_node_uris: 3 / loopback_node_uris: 0 / uncontrolled_initial_cause: Vulnerability (AU) discovered at "Router2" / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfExtrinsic-VN-TW-c56fd826 ("Router2" loses Extrinsic-VN-Trustworthiness)
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Vulnerability (VN) discovered at "Router2" / root cause: None / max_likelihood: 2 / csg_reports: 0 / cause_node_uris: 3 / loopback_node_uris: 0 / uncontrolled_initial_cause: Vulnerability (VN) discovered at "Router2" / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-ConnectionsAllowed-e3f7dcf0 (Connections Allowed at [NetworkPath:Internet])
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Network path across "Internet" enters service / root cause: None / max_likelihood: 5 / csg_reports: 0 / cause_node_uris: 5 / loopback_node_uris: 0 / uncontrolled_initial_cause: Network path across "Internet" enters service / uncontrolled_root_cause: None
+DEBUG:                                                                                Trustworthiness Attribute Sets:
+DEBUG:                                                                                 - TWAS: Network User Trustworthiness of Internet is Very Low, likelihood (asserted/inferred) 0 / 0
+DEBUG:                                                                                 - TWAS: Connections Blocked of [Interface:Router2-Internet] is Safe, likelihood (asserted/inferred) 5 / 5
+DEBUG:                                                                                 - TWAS: Extrinsic-AU-Trustworthiness of Router2 is Safe, likelihood (asserted/inferred) 5 / 3
+DEBUG:                                                                                 - TWAS: Extrinsic-VN-Trustworthiness of Router2 is Safe, likelihood (asserted/inferred) 5 / 3
+DEBUG:                                                                                 - TWAS: Connections Blocked of [NetworkPath:Internet] is Safe, likelihood (asserted/inferred) 5 / 0
+DEBUG:                                                                                Secondary threat causes:
+DEBUG:                                                                                Likelihoods: inv(TWAS) [5, 0, 2, 2, 5] => 0 / Secondary [] => 9999 / Result 0
+DEBUG:                                                                                Threat has zero max likelihood so cannot be the cause of anything
+DEBUG:                                                                                Discarding 1 CSG reports
+DEBUG:                                                                                 - Control Strategy Report: [Control Strategy: Block Interface ("[Interface:Router2-Internet]") (http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#CSG-BlockInterface_M_3b37a036) / Effectiveness: 5 / Max Likelihood: 0] / [Initial Cause: AND(Host "Router2" in service, Subnet "Internet" in service)] / [Root Cause: None] / [Intermediate Cause: Threat: Access to "Router2" from "Internet" enabled (http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#I.DA.I.8-MP-I_c56fd826_9b870c51_985252d)] / Uncontrolled Likelihood: 5 / Misbehaviour Set: None
+DEBUG:                                                                                New explanation 0: initial_cause: None / root cause: None / max_likelihood: 0 / csg_reports: 0 / cause_node_uris: 19 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+
+At the moment we are doing:
+  parent_likelihood = min(inferred_twas_likelihood, secondary_parent_misbehaviour_likelihood)  
+  combined_max_likelihood = min(MS max_likelihood)
+then taking max of those two
+
+need to look at the TWAS along with the linked MS and take the max(ms.max_likelihood, inv(twas.asserted_level)): the max_likelihood of each cause one by one
+the twas.inferred_level = min(ms.likelihood, twas.asserted_level) so that is different.
+
+
+DEBUG:                                                                            Explaining Threat: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#H.V.IoH.3-MP-IoH_985252d_a9ac9140_c56fd826_9b870c51_985252d_e3f7dcf0 (Remote anonymous exploit on device "Router2" from "Internet" via "Internet")
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfNetworkUserTW-985252d ("Internet" loses Network User Trustworthiness)
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: None / root cause: None / max_likelihood: 5 / csg_reports: 0 / cause_node_uris: 1 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-ConnectionsAllowed-9b870c51 (Connections Allowed at [Interface:Router2-Internet])
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: AND(Host "Router2" in service, Subnet "Internet" in service) / root cause: None / max_likelihood: 5 / csg_reports: 1 / cause_node_uris: 10 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfExtrinsic-AU-TW-c56fd826 ("Router2" loses Extrinsic-AU-Trustworthiness)
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Vulnerability (AU) discovered at "Router2" / root cause: None / max_likelihood: 2 / csg_reports: 0 / cause_node_uris: 3 / loopback_node_uris: 0 / uncontrolled_initial_cause: Vulnerability (AU) discovered at "Router2" / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfExtrinsic-VN-TW-c56fd826 ("Router2" loses Extrinsic-VN-Trustworthiness)
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Vulnerability (VN) discovered at "Router2" / root cause: None / max_likelihood: 2 / csg_reports: 0 / cause_node_uris: 3 / loopback_node_uris: 0 / uncontrolled_initial_cause: Vulnerability (VN) discovered at "Router2" / uncontrolled_root_cause: None
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-ConnectionsAllowed-e3f7dcf0 (Connections Allowed at [NetworkPath:Internet])
+DEBUG:                                                                                    Reusing cached explanation 0: initial_cause: Network path across "Internet" enters service / root cause: None / max_likelihood: 5 / csg_reports: 0 / cause_node_uris: 5 / loopback_node_uris: 0 / uncontrolled_initial_cause: Network path across "Internet" enters service / uncontrolled_root_cause: None
+DEBUG:                                                                                Parent likelihoods: [5, 5, 2, 2, 5]
+DEBUG:                                                                                Threat has 2 Control Strategies. Parent likelihood: 0 / Threat likelihood: 0
+DEBUG:                                                                                Candidate Control Strategy: Patching At Host ("Router2") / Active: False / Max likelihood: 2
+DEBUG:                                                                                Candidate Control Strategy: Patching At Host.Implementation ("Router2", "Router2") / Active: False / Max likelihood: 0
+DEBUG:                                                                                New explanation 0: initial_cause: AND(Vulnerability (AU) discovered at "Router2", Vulnerability (VN) discovered at "Router2", Host "Router2" in service, Subnet "Internet" in service, Network path across "Internet" enters service) / root cause: None / max_likelihood: 2 / csg_reports: 1 / cause_node_uris: 19 / loopback_node_uris: 0 / uncontrolled_initial_cause: AND(Vulnerability (AU) discovered at "Router2", Vulnerability (VN) discovered at "Router2", Network path across "Internet" enters service) / uncontrolled_root_cause: None
+
+and above that:
+
+DEBUG:                                                                                Explaining Misbehaviour: http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfNetworkUserTW-985252d ("Internet" loses Network User Trustworthiness)
+DEBUG:                                                                                    Misbehaviour has no causes: Misbehaviour: "Internet" loses Network User Trustworthiness (http://it-innovation.soton.ac.uk/ontologies/trustworthiness/system#MS-LossOfNetworkUserTW-985252d)
+DEBUG:                                                                                    New explanation 0: initial_cause: None / root cause: None / max_likelihood: 0 / csg_reports: 0 / cause_node_uris: 1 / loopback_node_uris: 0 / uncontrolled_initial_cause: None / uncontrolled_root_cause: None
+DEBUG:                                                                                 - ms.max_likelihood: 0 / twas.asserted_level_number: 0 => 5
+
+CSV now includes sensible lines relating to both FWBlocks
+CSV also includes a line with no controls on it relating to loss of authenticity. Loss of authenticity has a negligible likelihood in the actual risk calc. It appears because the impact was set to High. 
+In the CSV it says the residual likelihood/risk is 5/4 which must be wrong. The residual likelihood comes from the uncontrolled max_likelihood. The error is that somehow there is a path that has no CSGs on it.
+
+Testing other models:
+
+small-1-secure-router.nq.gz
+  - two paths via routers from internet to data, one router has secure config, the other not
+  ./risk-report.py -i example-models/small-1-secure-router.nq.gz -o small-1-secure-router-1.1.csv -d ../domain-network/csv/ |& tee small-1-secure-router-1.1.log
+  - analysis in small-1-secure-router-1.1.csv seems fine and slightly better than previous one
+
+small-2-secure-router.nq.gz
+  - two paths via routers from internet to data, both routers have secure Config
+  ./risk-report.py -i example-models/small-2-secure-router.nq.gz -o small-2-secure-router-1.1.csv -d ../domain-network/csv/ |& tee small-2-secure-router-1.1.log
+  - analysis in small-2-secure-router-1.1.csv seems fine and slightly better than previous one
+
+small-1-secure-router-2.nq.gz
+  - adds FWBlock at "[Interface:Router1-Internet]"
+  ./risk-report.py -i example-models/small-1-secure-router-2.nq.gz -o small-1-secure-router-2.2.csv -d ../domain-network/csv/ |& tee small-1-secure-router-2.2.log
+  - analysis in small-1-secure-router-2.2.csv is now sensible
+
+Adjusted uncontrolled cause code again.
+
+small-2-secure-router-2.nq.gz
+  - adds FWBlock at "[Interface:Router2-Internet]"
+  ./risk-report.py -i example-models/small-2-secure-router-2.nq.gz -o small-2-secure-router-2.6.csv -d ../domain-network/csv/ |& tee small-2-secure-router-2.6.log
+  - no uncontrolled paths: good
+
+small-1-secure-router-2.nq.gz
+  - adds FWBlock at "[Interface:Router1-Internet]"
+  ./risk-report.py -i example-models/small-1-secure-router-2.nq.gz -o small-1-secure-router-2.3.csv -d ../domain-network/csv/ |& tee small-1-secure-router-2.3.log
+  - all the same apart from the uncontrolled path: good
+  - uncontrolled path initial cause in new analysis is much shorter: probably good!
+
+Trying steel mill models again:
+
+./risk-report.py -i example-models/Steel\ Mill\ 2\ blocks+\ 2023-11-06T15_04.nq.gz -o steel-2.6.csv -d ../domain-network/csv/ >& steel-2.6.log
+  - has no uncontrolled paths: good
+  - looks pretty sensible, hard to compare to previous attempt
+  - the number of CSGs mentioned is the same as before and looks sensible
+
+./risk-report.py -i example-models/Steel\ Mill\ 1\ block\ 2023-11-06T15_27.nq.gz -o steel-1.5.csv -d ../domain-network/csv/ >& steel-1.5.log
+  - has two uncontrolled paths: good
+
+Adjusted CLI arguments, adding one to hide initial causes.
+
+./risk-report.py -i example-models/Steel\ Mill\ 1\ block\ 2023-11-06T15_27.nq.gz -o steel-1.6.csv -d ../domain-network/csv/ -s --hide-initial-causes >& steel-1.6.log
+
+Trying NEMECYS use case:
+
+./risk-report.py -i example-models/dbt_test2_latest2_reduced\ 2024-06-10T17_01.nq.gz -o nemecys.csv -d ../domain-network-6a-6-1-1/csv/ |& tee nemecys.log
