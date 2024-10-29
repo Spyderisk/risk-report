@@ -1,3 +1,5 @@
+All models were validated against domain-network v6a6-1-2
+
 small 2024-05-08 / 19
 
 * Server -> Stores -> Data
