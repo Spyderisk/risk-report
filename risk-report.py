@@ -102,6 +102,7 @@ THREAT = URIRef(CORE + "#Threat")
 HAS_PRIOR = URIRef(CORE + "#hasPrior")
 HAS_IMPACT = URIRef(CORE + "#hasImpactLevel")
 HAS_RISK = URIRef(CORE + "#hasRisk")
+HAS_FREQUENCY = URIRef(CORE + "#hasFrequency")
 MISBEHAVIOUR_SET = URIRef(CORE + "#MisbehaviourSet")
 MITIGATES = URIRef(CORE + "#mitigates")
 BLOCKS = URIRef(CORE + "#blocks")
@@ -631,6 +632,12 @@ class Threat(Entity):
             return None
         return uriref.split('/')[-1]
 
+    def _frequency_uri(self):
+        uriref = self.graph.value(self.uriref, HAS_FREQUENCY)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
+
     def _short_comment(self):
         """Return the first part of the threat description (up to the colon)"""
         comment = self.graph.value(subject=self.uriref, predicate=HAS_COMMENT)
@@ -692,6 +699,18 @@ class Threat(Entity):
         if self._risk_uri() is None:
             return "N/A"
         return dm_risk_levels[self._risk_uri()]["label"]
+
+    @property
+    def frequency_number(self):
+        if self._frequency_uri() is None:
+            return None
+        return dm_likelihood_levels[self._frequency_uri()]["number"]
+
+    @property
+    def frequency_label(self):
+        if self._frequency_uri() is None:
+            return None
+        return dm_likelihood_levels[self._frequency_uri()]["label"]
 
     @property
     def is_normal_op(self):
@@ -816,22 +835,26 @@ class Threat(Entity):
         # For a secondary threat it's the minimum likelihood of the causal misbehaviours (secondary effect conditions).
         # We need to take into account that threats can have mixed causes (so can be both "primary" and "secondary"). The minimum likelihood of these causes is used.
 
-        # TODO: add in threat frequency?
-
         inferred_twas_trustworthiness_levels = [twas.inferred_level_number for twas in self.trustworthiness_attribute_sets]
         inferred_twas_likelihoods = [inverse(level) for level in inferred_twas_trustworthiness_levels]
         if len(inferred_twas_likelihoods) > 0:
             inferred_twas_likelihood = min(inferred_twas_likelihoods)  # take min() as this is a threat
         else:
-            inferred_twas_likelihood = 9999  # TODO: +infinity or something instead of magic number
+            inferred_twas_likelihood = float('inf')  # Larger than the top of the actual scale
 
         secondary_parent_misbehaviour_likelihoods = [ms.likelihood_number for ms in self.secondary_threat_misbehaviour_parents]
         if len(secondary_parent_misbehaviour_likelihoods) > 0:
             secondary_parent_misbehaviour_likelihood = min(secondary_parent_misbehaviour_likelihoods)  # take min() as this is a threat
         else:
-            secondary_parent_misbehaviour_likelihood = 9999
+            secondary_parent_misbehaviour_likelihood = float('inf')
 
-        return min(inferred_twas_likelihood, secondary_parent_misbehaviour_likelihood)  # take min() as all causes are needed
+        likelihood = min(inferred_twas_likelihood, secondary_parent_misbehaviour_likelihood)  # take min() as all causes are needed
+
+        # A threat's likelihood cannot go above its frequency, if it is defined
+        if self.frequency_number is not None:
+            likelihood = min(likelihood, self.frequency_number)
+
+        return likelihood
 
     def explain_likelihood(self, current_path=None):
         """Return an explanation of the likelihood of the Threat, given the path taken to get to the Threat. Return a cached result if there is a valid one."""
