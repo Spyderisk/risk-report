@@ -109,6 +109,7 @@ BLOCKS = URIRef(CORE + "#blocks")
 HAS_CONTROL_SET = URIRef(CORE + "#hasControlSet")
 HAS_MANDATORY_CONTROL_SET = URIRef(CORE + "#hasMandatoryCS")
 CONTROL_SET = URIRef(CORE + "#ControlSet")
+HAS_COVERAGE = URIRef(CORE + "#hasCoverageLevel")
 HAS_CONTROL = URIRef(CORE + "#hasControl")
 IS_PROPOSED = URIRef(CORE + "#isProposed")
 CAUSES_THREAT = URIRef(CORE + "#causesThreat")
@@ -492,8 +493,19 @@ class ControlStrategy(Entity):
 
     @property
     def maximum_likelihood(self):
-        # TODO: take into account the coverage level of mandatory ControlSets if this is a population-supporting domain model
-        return inverse(self.effectiveness_number)
+        """Return the maximum likelihood of the Threats that this Control Strategy can block.
+        
+        Simply, this is the inverse of the CSG's effectiveness. However, we also need to take into account the coverage levels of the mandatory control sets.
+        The maximum likelihood is the minimum of the CSG's effectiveness and the minimum coverage of the mandatory control sets.
+        We do not check here whether the CSG or CS are active or not, as we want to know the maximum potential effectiveness.
+        """
+        control_sets = self.graph.objects(self.uriref, HAS_MANDATORY_CONTROL_SET)
+        min_coverage = INFINITY
+        for cs in control_sets:
+            coverage_uri_fragment = self.graph.value(cs, HAS_COVERAGE).split("/")[-1]
+            coverage_level = dm_trustworthiness_levels[coverage_uri_fragment]["number"]
+            min_coverage = min(min_coverage, coverage_level)
+        return inverse(min(self.effectiveness_number, min_coverage))
 
     @property
     def is_current_risk_csg(self):
