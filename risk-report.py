@@ -847,18 +847,21 @@ class Threat(Entity):
         # For a secondary threat it's the minimum likelihood of the causal misbehaviours (secondary effect conditions).
         # We need to take into account that threats can have mixed causes (so can be both "primary" and "secondary"). The minimum likelihood of these causes is used.
 
+        # TODO: do we ever get here for a triggered threat with no triggers?
+        # Would need to check something like: if threat.isTriggered() and threat.getTriggeredByCSG().isEmpty()
+
         inferred_twas_trustworthiness_levels = [twas.inferred_level_number for twas in self.trustworthiness_attribute_sets]
         inferred_twas_likelihoods = [inverse(level) for level in inferred_twas_trustworthiness_levels]
         if len(inferred_twas_likelihoods) > 0:
             inferred_twas_likelihood = min(inferred_twas_likelihoods)  # take min() as this is a threat
         else:
-            inferred_twas_likelihood = float('inf')  # Larger than the top of the actual scale
+            inferred_twas_likelihood = INFINITY  # Larger than the top of the actual scale
 
         secondary_parent_misbehaviour_likelihoods = [ms.likelihood_number for ms in self.secondary_threat_misbehaviour_parents]
         if len(secondary_parent_misbehaviour_likelihoods) > 0:
             secondary_parent_misbehaviour_likelihood = min(secondary_parent_misbehaviour_likelihoods)  # take min() as this is a threat
         else:
-            secondary_parent_misbehaviour_likelihood = float('inf')
+            secondary_parent_misbehaviour_likelihood = INFINITY
 
         likelihood = min(inferred_twas_likelihood, secondary_parent_misbehaviour_likelihood)  # take min() as all causes are needed
 
@@ -1041,7 +1044,7 @@ class Threat(Entity):
         if len(self.control_strategies) > 0:
             logging.debug("    " * len(current_path) + "Threat has " + str(len(self.control_strategies)) + " Control Strategies. Local uncontrolled likelihood: " + str(self.local_uncontrolled_likelihood) + " / Threat likelihood: " + str(self.likelihood_number))
             for csg in self.control_strategies:
-                if combined_upstream_uncontrolled_likelihood > csg.maximum_likelihood and csg.is_active:
+                if csg.is_active and combined_upstream_uncontrolled_likelihood > csg.maximum_likelihood:
                     logging.debug("    " * len(current_path) + "Candidate Control Strategy: " + csg.description + " / Max likelihood: " + str(csg.maximum_likelihood))
                     csg_report = ControlStrategyReport(
                         control_strategy=csg,
@@ -1403,6 +1406,11 @@ class MisbehaviourSet(Entity):
         # We can't just use the is_normal_op property which reads from the predicate added in the risk calculation because it is also dependent on the likelihood calculation.
         # We therefore work out if each MisbehaviourSet is a normal effect (disregarding likelihood) and store it in the Explanation so that it can be accessed by the Threat._explain_likelihood().
         # It is tempting to store the result on the MisbehaviourSet object but it may be that it varies depending on the route taken to get to the MisbehaviourSet (not sure).
+
+        # The calculation on the following line does not quite capture all cases. A MisbehaviourSet could have a mixture of parents, some that are offensive threats and some normal operation threats.
+        # It would be labelled as a normal-op effect iff the highest likelihood normal-op threat parent is >= the highest likelihood offensive threat parent.
+        # As we're ignoring the likelihoods calculated from the risk calculation, it becomes difficult to deal with the case of a mixture of parent threat types.
+        # What we can say for sure is that if all the parents ("causes") of the MisbehaviourSet are normal operation effects and the uncontrolled upstream likelihood is non-zero then the MisbehaviourSet is an (extra) normal operation effect.
         is_extra_normal_effect = combined_upstream_uncontrolled_likelihood > 0 and self.all_causes_are_normal_op
         if is_extra_normal_effect:
             logging.debug("    " * len(current_path) + "Misbehaviour is an extra normal effect")
@@ -1592,75 +1600,6 @@ class Timer():
         etime = time.perf_counter()
         logging.info(f"-- Duration: {etime - self.stime:0.2f} seconds")
         self.stime = time.perf_counter()
-
-
-#
-# TODO: This block of code needs to be incorporated into the Entity subclasses or deleted
-#
-
-def get_threat_direct_cause_uris(threat_uri):
-    """Return a list of urirefs which are the direct causes (misbehaviours) of a threat"""
-    direct_cause_uris = []
-    for direct_cause in rdf_graph.subjects(CAUSES_THREAT, threat_uri):
-        direct_cause_uris.append(direct_cause)
-    return direct_cause_uris
-
-def get_misbehaviour_direct_cause_uris(misb_uri):
-    """Return a list of urirefs which are the direct causes (threats) of a misbehaviour"""
-    direct_cause_uris = []
-    for threat in rdf_graph.subjects(CAUSES_DIRECT_MISBEHAVIOUR, misb_uri):
-        direct_cause_uris.append(threat)
-    return direct_cause_uris
-
-def get_is_misbehaviour_on_asserted_asset(ms_uriref):
-    """Return Boolean describing if the uriref refers to a misbehaviour located at an asserted asset"""
-    if get_is_threat(ms_uriref):
-        return False
-    else:
-        for asset_uriref in rdf_graph.objects(ms_uriref, LOCATED_AT):
-            if get_is_asserted_asset(asset_uriref):
-                return True
-        return False
-
-def get_is_asserted_asset(asset_uriref):
-    """Return Boolean describing whether the uriref refers to an asserted asset"""
-    # There should only be 1 triple matching this, but I can't see another way to just query the asserted graph
-    for dummy, dummy, type in rdf_graph.triples((asset_uriref, HAS_TYPE, None, asserted_graph)):
-        if type.startswith(DOMAIN):
-            return True
-    return False
-
-def get_is_in_service(threat_uriref):
-    for cause_uriref in rdf_graph.subjects(CAUSES_THREAT, threat_uriref):
-        if get_is_default_tw(cause_uriref):
-            return True
-    return False
-
-def get_misbehaviour_location_uri(ms_uriref):
-    """Return the asset URIs that the misbehaviour has an effect on"""
-    if not get_is_threat(ms_uriref):
-        return rdf_graph.value(ms_uriref, LOCATED_AT)
-
-def get_threat_involved_asset_uris(threat_uriref):
-    """Return a list of urirefs of the assets that are in a threat's matching pattern"""
-    assets = []
-    for matching_pattern in rdf_graph.objects(threat_uriref, APPLIES_TO):
-        for node in rdf_graph.objects(matching_pattern, HAS_NODE):
-            for asset in rdf_graph.objects(node, HAS_ASSET):
-                assets.append(asset)
-    return assets
-
-def get_cs_comment(cs_uri):
-    control_uri = rdf_graph.value(cs_uri, HAS_CONTROL)
-    control_label = un_camel_case(dm_controls[control_uri.split('/')[-1]]["label"])
-    asset_uri = rdf_graph.value(cs_uri, LOCATED_AT)
-    asset_label = rdf_graph.value(asset_uri, HAS_LABEL)
-    if asset_label[0] != "[": asset_label = '"' + asset_label + '"'
-    return control_label + " at " + asset_label
-
-#
-# end block
-#
 
 
 def unzip_gz_file(filename):
