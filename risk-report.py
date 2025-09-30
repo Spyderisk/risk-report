@@ -1,4 +1,4 @@
-#!/usr/bin/python3.9
+#!/usr/bin/python3
 
 # Copyright 2024 University of Southampton IT Innovation Centre
 
@@ -40,7 +40,7 @@ VERSION = "1.0"
 algebra = boolean.BooleanAlgebra()
 TRUE, FALSE, NOT, AND, OR, symbol = algebra.definition()
 
-logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
+logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
 
 parser = argparse.ArgumentParser(description="Generate risk reports for Spyderisk system models",
                                  epilog="e.g. risk-report.py -i SteelMill.nq.gz -o steel.pdf -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60")
