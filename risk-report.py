@@ -1537,9 +1537,12 @@ class ControlStrategyReport():
 
     @classmethod
     def cvs_header(cls):
-        columns = ["Initial Cause", "Root Cause", "Intermediate Cause", "Consequence",
-                "Impact", "Likelihood", "Risk",
-                "Control", "Residual Likelihood", "Residual Risk", "Degree", "Comment"]
+        #columns = ["Initial Cause", "Root Cause", "Intermediate Cause", "Consequence",
+        #        "Impact", "Likelihood", "Risk",
+        #        "Control", "Residual Likelihood", "Residual Risk", "Degree", "Comment"]
+        columns = ["Hazardous Situation", "Harm",
+                "Severity", "Probability", "Risk",
+                "Measures", "Residual Probability", "Residual Risk", "Measures Usefulness", "Measures Effectiveness"]
 
         if args["hide_initial_causes"]:
             return columns[1:]
@@ -1582,7 +1585,11 @@ class ControlStrategyReport():
             residual_likelihood = self.control_strategy.maximum_likelihood
             residual_risk = dm_risk_lookup[impact][residual_likelihood]
 
-        columns = [initial, root, intermediate, self.misbehaviour.comment,
+        #columns = [initial, root, intermediate, self.misbehaviour.comment,
+        #        impact, likelihood, risk,
+        #        control_strategy, residual_likelihood, residual_risk,
+        #        degree, comment]
+        columns = [root, self.misbehaviour.comment,
                 impact, likelihood, risk,
                 control_strategy, residual_likelihood, residual_risk,
                 degree, comment]
