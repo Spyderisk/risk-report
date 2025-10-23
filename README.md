@@ -1,33 +1,34 @@
 # Spyderisk Risk Reporting Tool
 
-This is a Python prototype by @scp93ch to figure out the right algorithm for a
+This is a standalone tool, authored initially by @scp93ch, to figure out the correct algorithm for a
 risk report, as discussed in [system-modeller Issue
-133](https://github.com/Spyderisk/system-modeller/issues/133). Eventually
-someone will take this algorithm and implement it in system-modeller Java code.
+133](https://github.com/Spyderisk/system-modeller/issues/133). In the longer term, this will either be 
+integrated into Spyderisk as-is, or will be re-implemented in Java to run in the Spyderisk service.
 
-The tool is implemented in Python and can be directly executed directly from
-the command line, provided the required libraries (described in
+The tool is implemented in Python and can be executed directly from
+the command line, provided that the required libraries (listed in
 requirements.txt) are installed.
 
-Alternatively, you can run the code using the Makefile utility, which
-automatically manages the python virtual environment and installs the necessary
-dependencies.
+For convenience, we provice a Makefile which automatically manages a python virtual environment, 
+installs the necessary dependencies, then generates the risk report.
 
 
 ## Input Requirements
 
 The reporting tool requires the following inputs:
 
-- system model 
+- system model, either:
    - local file, an exported system model in `.nq`, or `.nq.gz` format
-   - remote URL, a system model web key URL (no need to export or download)
-- Domain model CSV folder, it can be downlowed from [...] and unzipped locally before running the tool
+   - remote URI, a system model web key URI (exporting from System Modeller is done automatically)
+- domain model CSV folder, which can be either:
+   - obtained directly from the [Git repository](https://github.com/Spyderisk/domain-network.git)
+   - extracted from a domain model zip file, if available
 
 
 ### Help page
 
 ```
-usage: risk-report.py [-h] -i NQ_filename|Model_URL -o output_csv_filename -d
+usage: risk-report.py [-h] -i NQ_filename|Model_URI -o output_csv_filename -d
                       CSV_directory [-m URI_fragment [URI_fragment ...]] [-s]
                       [--hide-initial-causes] [--version]
 
@@ -35,9 +36,9 @@ Generate risk reports for Spyderisk system models
 
 options:
   -h, --help            show this help message and exit
-  -i NQ_filename|Model_URL, --input NQ_filename|Model_URL
+  -i NQ_filename|Model_URI, --input NQ_filename|Model_URI
                         Filename of the validated system model NQ file
-                        (compressed or not) or the Spyderisk webkey model URL
+                        (compressed or not) or the Spyderisk webkey model URI
   -o output_csv_filename, --output output_csv_filename
                         Output CSV filename
   -d CSV_directory, --domain CSV_directory
@@ -54,7 +55,7 @@ options:
   --version             show program's version number and exit
 ```
 
-e.g. risk-report.py -i SteelMill.nq.gz -o steel.pdf -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60
+e.g. risk-report.py -i system_model.nq.gz -o report.csv -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60
 
 
 ## Examples running reporting through Makefile
@@ -71,7 +72,7 @@ Use a local system model NQ file:
 make report ARGS="-i 'example b132-e5cfa54.nq.gz' -o test2.csv -d domain-network-132-e5cfa54/csv"
 ```
 
-Use the URL of system model directly:
+Use the URI of system model directly:
 ```
 make report ARGS="-i 'https://nemecys2.it-innovation.soton.ac.uk/system-modeller/models/2ag...' -o test2.csv -d domain-network-132-e5cfa54/csv"
 ```
