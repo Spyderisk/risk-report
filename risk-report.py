@@ -20,6 +20,8 @@
 # <!-- SPDX-FileType: Source code -->
 # <!-- SPDX-FileComment: Original by Stephen Phillips, May 2024 -->
 
+import sys
+import io
 import argparse
 import copy
 import csv
@@ -32,8 +34,17 @@ from functools import cache, cached_property
 from itertools import chain
 from pathlib import Path
 
+from typing import Union, BinaryIO
+
 import boolean
 from rdflib import ConjunctiveGraph, Literal, URIRef
+
+from urllib.parse import urlparse
+
+from ssmclientlib import ApiClient
+from ssmclientlib import Configuration
+from ssmclientlib import ModelControllerApi
+from ssmclientlib.exceptions import ApiException
 
 VERSION = "1.0"
 
@@ -44,7 +55,7 @@ logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
 
 parser = argparse.ArgumentParser(description="Generate risk reports for Spyderisk system models",
                                  epilog="e.g. risk-report.py -i SteelMill.nq.gz -o steel.pdf -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60")
-parser.add_argument("-i", "--input", dest="input", required=True, metavar="input_NQ_filename", help="Filename of the validated system model NQ file (compressed or not)")
+parser.add_argument("-i", "--input", dest="input", required=True, metavar="NQ_filename|Model_URI", help="Filename of the validated system model NQ file (compressed or not) or the Spyderisk model webkey URI")
 parser.add_argument("-o", "--output", dest="output", required=True, metavar="output_csv_filename", help="Output CSV filename")
 parser.add_argument("-d", "--domain", dest="csvs", required=True, metavar="CSV_directory", help="Directory containing the domain model CSV files")
 parser.add_argument("-m", "--misbehaviour", dest="misbehaviours", required=False, nargs="+", metavar="URI_fragment", help="Target misbehaviour IDs, e.g. 'MS-LossOfControl-f8b49f60'. If not specified then the high impact and high risk ones will be analysed.")
@@ -55,7 +66,46 @@ parser.add_argument("--version", action="version", version="%(prog)s " + VERSION
 raw = parser.parse_args()
 args = vars(raw)
 
-nq_filename = args["input"]
+
+def parse_input(nq_data):
+    """ Parse input as either SSM URI or file path """
+    parsed = urlparse(str(nq_data))
+    if parsed.scheme in ("http", "https") and parsed.netloc:
+        logging.info("Downloading model from remote URI...")
+
+        path_parts = parsed.path.strip("/").split("/")
+
+        # remove suffix edit or read from URI
+        if path_parts[-1] in ["edit", "read"]:
+            logging.debug(f"removing {path_parts[-1]} from URI")
+            path_parts.pop()
+
+        if len(path_parts) < 2:
+            raise ValueError(f"unexpected URL format: {nq_data}")
+
+        ssm_url = f"{parsed.scheme}://{parsed.netloc}/{'/'.join(path_parts[:-2])}"
+        model_id = path_parts[-1]
+        logging.info(f"SSM_URL: {ssm_url}")
+        logging.info(f"Model ID: {model_id}")
+
+        try:
+            # initialise ssm client and export the model
+            configuration = Configuration(host=ssm_url)
+            api_client = ApiClient(configuration)
+            api_model = ModelControllerApi(api_client)
+            nq_data = api_model.export(model_id)
+        except ApiException as ex:
+            logging.error(f"Failed to export model {ex}")
+            #raise Exception("Failed to export model") from ex
+            sys.exit(1)
+
+    else:
+        logging.info(f"Using local copy of model: {nq_data}")
+
+    return nq_data
+
+
+nq_filename = parse_input(args["input"])
 csv_directory = args["csvs"]
 output_filename = args["output"]
 target_ms_uris = args["misbehaviours"]
@@ -129,6 +179,7 @@ IN_SERVICE = URIRef(DOMAIN + "#InService")
 
 # The second line of a CSV file often contains default values and if so will include domain#000000
 DUMMY_URI = "domain#000000"
+
 
 def load_domain_misbehaviours(filename):
     """Load misbehaviours from the domain model so that we can use the labels"""
@@ -389,13 +440,17 @@ class LoopbackError(Exception):
 # TODO: Add the domain model as a parameter? And load domain model from NQ rather than CSV files
 class Graph(ConjunctiveGraph):
     """Represents the system model as an RDF graph."""
-    def __init__(self, nq_filename):
+    def __init__(self, source: Union[str, bytes, Path, BinaryIO]):
         super().__init__()
-        if nq_filename.endswith(".gz"):
-            with gzip.open(nq_filename, "rb") as f:
+        if isinstance(source, (str, Path)):
+            if source.endswith(".gz"):
+                with gzip.open(source, "rb") as f:
+                    self.parse(f, format="nquads")
+            else:
+                self.parse(source, format="nquads")
+        elif isinstance(source, (bytes, bytearray)):
+            with gzip.GzipFile(fileobj=io.BytesIO(source)) as f:
                 self.parse(f, format="nquads")
-        else:
-            self.parse(nq_filename, format="nquads")
 
     def get_entity(self, uriref):
         if (uriref, HAS_TYPE, MISBEHAVIOUR_SET) in self:
@@ -1537,9 +1592,12 @@ class ControlStrategyReport():
 
     @classmethod
     def cvs_header(cls):
-        columns = ["Initial Cause", "Root Cause", "Intermediate Cause", "Consequence",
-                "Impact", "Likelihood", "Risk",
-                "Control", "Residual Likelihood", "Residual Risk", "Degree", "Comment"]
+        #columns = ["Initial Cause", "Root Cause", "Intermediate Cause", "Consequence",
+        #        "Impact", "Likelihood", "Risk",
+        #        "Control", "Residual Likelihood", "Residual Risk", "Degree", "Comment"]
+        columns = ["Hazardous Situation", "Harm",
+                "Severity", "Probability", "Risk",
+                "Measures", "Residual Probability", "Residual Risk", "Measures Usefulness", "Measures Effectiveness"]
 
         if args["hide_initial_causes"]:
             return columns[1:]
@@ -1582,7 +1640,11 @@ class ControlStrategyReport():
             residual_likelihood = self.control_strategy.maximum_likelihood
             residual_risk = dm_risk_lookup[impact][residual_likelihood]
 
-        columns = [initial, root, intermediate, self.misbehaviour.comment,
+        #columns = [initial, root, intermediate, self.misbehaviour.comment,
+        #        impact, likelihood, risk,
+        #        control_strategy, residual_likelihood, residual_risk,
+        #        degree, comment]
+        columns = [root, self.misbehaviour.comment,
                 impact, likelihood, risk,
                 control_strategy, residual_likelihood, residual_risk,
                 degree, comment]
