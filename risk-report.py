@@ -20,6 +20,7 @@
 # <!-- SPDX-FileType: Source code -->
 # <!-- SPDX-FileComment: Original by Stephen Phillips, May 2024 -->
 
+import sys
 import io
 import argparse
 import copy
@@ -43,7 +44,7 @@ from urllib.parse import urlparse
 from ssmclientlib import ApiClient
 from ssmclientlib import Configuration
 from ssmclientlib import ModelControllerApi
-from ssmclientlib.rest import ApiException
+from ssmclientlib.exceptions import ApiException
 
 VERSION = "1.0"
 
@@ -54,7 +55,7 @@ logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
 
 parser = argparse.ArgumentParser(description="Generate risk reports for Spyderisk system models",
                                  epilog="e.g. risk-report.py -i SteelMill.nq.gz -o steel.pdf -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60")
-parser.add_argument("-i", "--input", dest="input", required=True, metavar="NQ_filename|Model_URL", help="Filename of the validated system model NQ file (compressed or not) or the Spyderisk webkey model URL")
+parser.add_argument("-i", "--input", dest="input", required=True, metavar="NQ_filename|Model_URI", help="Filename of the validated system model NQ file (compressed or not) or the Spyderisk model webkey URI")
 parser.add_argument("-o", "--output", dest="output", required=True, metavar="output_csv_filename", help="Output CSV filename")
 parser.add_argument("-d", "--domain", dest="csvs", required=True, metavar="CSV_directory", help="Directory containing the domain model CSV files")
 parser.add_argument("-m", "--misbehaviour", dest="misbehaviours", required=False, nargs="+", metavar="URI_fragment", help="Target misbehaviour IDs, e.g. 'MS-LossOfControl-f8b49f60'. If not specified then the high impact and high risk ones will be analysed.")
@@ -67,12 +68,17 @@ args = vars(raw)
 
 
 def parse_input(nq_data):
-    """ Parse input as either SSM URL or file path """
+    """ Parse input as either SSM URI or file path """
     parsed = urlparse(str(nq_data))
     if parsed.scheme in ("http", "https") and parsed.netloc:
-        logging.info("input is a url")
+        logging.info("input is a URI")
 
-        path_parts = parsed.path.rstrip("/").split("/")
+        path_parts = parsed.path.strip("/").split("/")
+
+        # remove suffix edit or read from URI
+        if path_parts[-1] in ["edit", "read"]:
+            logging.debug(f"removing {path_parts[-1]} from URI")
+            path_parts.pop()
 
         if len(path_parts) < 2:
             raise ValueError(f"unexpected URL format: {nq_data}")
@@ -82,11 +88,17 @@ def parse_input(nq_data):
         logging.info(f"SSM_URL: {ssm_url}")
         logging.info(f"Model ID: {model_id}")
 
-        # initialise ssm client and export the model
-        configuration = Configuration(host=ssm_url)
-        api_client = ApiClient(configuration)
-        api_model = ModelControllerApi(api_client)
-        nq_data = api_model.export(model_id)
+        try:
+            # initialise ssm client and export the model
+            configuration = Configuration(host=ssm_url)
+            api_client = ApiClient(configuration)
+            api_model = ModelControllerApi(api_client)
+            nq_data = api_model.export(model_id)
+        except ApiException as ex:
+            logging.error(f"Failed to export model {ex}")
+            #raise Exception("Failed to export model") from ex
+            sys.exit(1)
+
     else:
         logging.info("input is a file")
 
