@@ -73,7 +73,7 @@ make report ARGS="-h"
 Show Makefile targets:
 
 ```
-make report help
+make help
 ```
 
 Use a local system model NQ as the input file:
