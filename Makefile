@@ -30,7 +30,7 @@ clean:
 # run report
 report: $(VENV_DIR)/bin/activate
 	@echo "Running Risk Reporting..."
-	env/bin/python risk-report.py $(ARGS)
+	@env/bin/python risk-report.py $(ARGS)
 
 # show help
 help:

@@ -66,17 +66,24 @@ e.g. risk-report.py -i system_model.nq.gz -o report.csv -d ../domain-network/csv
 
 Show help info:
 
-
 ```
 make report ARGS="-h"
 ```
 
-Use a local system model NQ file:
+Show Makefile targets:
+
+```
+make report help
+```
+
+Use a local system model NQ as the input file:
+
 ```
 make report ARGS="-i 'example b132-e5cfa54.nq.gz' -o test2.csv -d domain-network-132-e5cfa54/csv"
 ```
 
-Use the URI of system model directly:
+Use the URI of system model directly as the input:
+
 ```
 make report ARGS="-i 'https://nemecys2.it-innovation.soton.ac.uk/system-modeller/models/2ag...' -o test2.csv -d domain-network-132-e5cfa54/csv"
 ```

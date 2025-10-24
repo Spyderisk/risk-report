@@ -71,7 +71,7 @@ def parse_input(nq_data):
     """ Parse input as either SSM URI or file path """
     parsed = urlparse(str(nq_data))
     if parsed.scheme in ("http", "https") and parsed.netloc:
-        logging.info("input is a URI")
+        logging.info("Downloading model from remote URI...")
 
         path_parts = parsed.path.strip("/").split("/")
 
@@ -100,7 +100,7 @@ def parse_input(nq_data):
             sys.exit(1)
 
     else:
-        logging.info("input is a file")
+        logging.info(f"Using local copy of model: {nq_data}")
 
     return nq_data
 
