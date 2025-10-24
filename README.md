@@ -24,8 +24,10 @@ The reporting tool requires the following inputs:
    - obtained directly from the [Git repository](https://github.com/Spyderisk/domain-network.git)
    - extracted from a domain model zip file, if available
 
-Note: The model webkey can be found in Spyderisk Dashboard by clicking the
-model's *Share Model* icon and copying the  *Edit Access* URI.
+N.B: The model webkey can be found in the Spyderisk Dashboard by clicking the
+model's *Share Model* icon and copying the *Edit Access* or *View-only Access* URI. 
+Technically, the trailing "/edit" or "/read" should be removed, however the report 
+tool will reomve these automatically, if present.
 
 ### Help page
 
