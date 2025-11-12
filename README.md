@@ -12,6 +12,9 @@ requirements.txt) are installed.
 For convenience, we provice a Makefile which automatically manages a python virtual environment, 
 installs the necessary dependencies, then generates the risk report.
 
+Note that the instructions to use 'make' below assume a Linux environment. The tool will also work in Windows, 
+using exactly the same commands, which can be achieved by using WSL. 
+For further info on using WSL, see [README_WIN.md](https://github.com/Spyderisk/risk-report/blob/main/README_WIN.md).
 
 ## Input Requirements
 
