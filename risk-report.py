@@ -34,6 +34,7 @@ from functools import cache, cached_property
 from itertools import chain
 from pathlib import Path
 
+from enum import IntEnum
 from typing import Union, BinaryIO
 
 import boolean
@@ -1641,18 +1642,55 @@ class ControlStrategyReport():
             residual_risk = dm_risk_lookup[impact][residual_likelihood]
 
         #columns = [initial, root, intermediate, self.misbehaviour.comment,
-        #        impact, likelihood, risk,
-        #        control_strategy, residual_likelihood, residual_risk,
-        #        degree, comment]
-        columns = [root, self.misbehaviour.comment,
-                impact, likelihood, risk,
-                control_strategy, residual_likelihood, residual_risk,
-                degree, comment]
+        #        impact, likelihood, risk, control_strategy,
+        #        residual_likelihood, residual_risk, degree, comment]
+        columns = [root, self.misbehaviour.comment, ImpactLevel(impact).name,
+                   LikelihoodLevel(likelihood).name, RiskLevel(risk).name,
+                   control_strategy, LikelihoodLevel(residual_likelihood).name,
+                   RiskLevel(residual_risk).name, degree, comment]
 
         if args["hide_initial_causes"]:
             return columns[1:]
         else:
             return columns
+
+class LikelihoodLevel(IntEnum):
+    NEGLIGIBLE = 0
+    VERYLOW = 1
+    LOW = 2
+    MEDIUM = 3
+    HIGH = 4
+    VERYHIGH = 5
+
+    @property
+    def toTWALevel(self):
+        members = list(LikelihoodLevel)
+        idx = members.index(self)
+        return TWALevel(members[-(idx + 1)].value)
+
+    @property
+    def pascal_case(self):
+        name = self.name.lower()
+        if name.startswith("very"):
+            return "Very" + name[4:].capitalize()
+        else:
+            return name.capitalize()
+
+class RiskLevel(IntEnum):
+    NEGLIGIBLE = 0
+    VERYLOW = 1
+    LOW = 2
+    MEDIUM = 3
+    HIGH = 4
+    VERYHIGH = 5
+
+class ImpactLevel(IntEnum):
+    NEGLIGIBLE = 0
+    VERYLOW = 1
+    LOW = 2
+    MEDIUM = 3
+    HIGH = 4
+    VERYHIGH = 5
 
 class Timer():
     def __init__(self):
