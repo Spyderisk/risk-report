@@ -78,13 +78,13 @@ make help
 Use a local system model NQ as the input file:
 
 ```
-make report ARGS="-i 'example b132-e5cfa54.nq.gz' -o test2.csv -d domain-network-132-e5cfa54/csv"
+make report ARGS="-i 'example b132-e5cfa54.nq.gz' -o test2.csv -iso 14971 -d domain-network-132-e5cfa54/csv"
 ```
 
 Use the URI of system model directly as the input:
 
 ```
-make report ARGS="-i 'https://nemecys2.it-innovation.soton.ac.uk/system-modeller/models/2ag...' -o test2.csv -d domain-network-132-e5cfa54/csv"
+make report ARGS="-i 'https://nemecys2.it-innovation.soton.ac.uk/system-modeller/models/2ag...' -o test2.csv -iso 14971 -d domain-network-132-e5cfa54/csv"
 ```
 
 
