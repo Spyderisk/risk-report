@@ -61,6 +61,7 @@ parser.add_argument("-o", "--output", dest="output", required=True, metavar="out
 parser.add_argument("-d", "--domain", dest="csvs", required=True, metavar="CSV_directory", help="Directory containing the domain model CSV files")
 parser.add_argument("-m", "--misbehaviour", dest="misbehaviours", required=False, nargs="+", metavar="URI_fragment", help="Target misbehaviour IDs, e.g. 'MS-LossOfControl-f8b49f60'. If not specified then the high impact and high risk ones will be analysed.")
 parser.add_argument("-s", "--simple-root-causes", dest="simple_root_causes", action="store_true", help="Keep the root causes simple (no top-level OR). Using this means more repetition.")
+parser.add_argument("-iso","--iso", dest="iso", required=True, metavar="ISO_standard", help="Select ISO standard (27001 or 14971)")
 parser.add_argument("--hide-initial-causes", dest="hide_initial_causes", action="store_true", help="Don't output the initial causes")
 parser.add_argument("--version", action="version", version="%(prog)s " + VERSION)
 
@@ -110,6 +111,8 @@ nq_filename = parse_input(args["input"])
 csv_directory = args["csvs"]
 output_filename = args["output"]
 target_ms_uris = args["misbehaviours"]
+iso_standard = args["iso"]
+logging.info(f"ISO standard: {iso_standard}")
 
 SHOW_LIKELIHOOD_IN_DESCRIPTION = False
 
@@ -1593,17 +1596,20 @@ class ControlStrategyReport():
 
     @classmethod
     def cvs_header(cls):
-        #columns = ["Initial Cause", "Root Cause", "Intermediate Cause", "Consequence",
-        #        "Impact", "Likelihood", "Risk",
-        #        "Control", "Residual Likelihood", "Residual Risk", "Degree", "Comment"]
-        columns = ["Hazardous Situation", "Harm",
-                "Severity", "Probability", "Risk",
-                "Measures", "Residual Probability", "Residual Risk", "Measures Usefulness", "Measures Effectiveness"]
-
-        if args["hide_initial_causes"]:
-            return columns[1:]
+        if iso_standard == "27001":
+            columns = ["Initial Cause", "Root Cause", "Intermediate Cause", "Consequence",
+                    "Impact", "Likelihood", "Risk",
+                    "Control", "Residual Likelihood", "Residual Risk", "Degree", "Comment"]
+            if args["hide_initial_causes"]:
+                return columns[1:]
+        elif iso_standard == "14971":
+            columns = ["Hazardous Situation", "Harm",
+                    "Severity", "Probability", "Risk",
+                    "Measures", "Residual Probability", "Residual Risk", "Measures Usefulness", "Measures Effectiveness"]
         else:
-            return columns
+            raise ValueError(f"unexpected ISO standard: {iso_standard}")
+        
+        return columns
         
     def csv_row(self, graph):
         initial = "None" if self.initial_cause is None else self.initial_cause.pretty_print()
@@ -1641,18 +1647,21 @@ class ControlStrategyReport():
             residual_likelihood = self.control_strategy.maximum_likelihood
             residual_risk = dm_risk_lookup[impact][residual_likelihood]
 
-        #columns = [initial, root, intermediate, self.misbehaviour.comment,
-        #        impact, likelihood, risk, control_strategy,
-        #        residual_likelihood, residual_risk, degree, comment]
-        columns = [root, self.misbehaviour.comment, ImpactLevel(impact).name,
-                   LikelihoodLevel(likelihood).name, RiskLevel(risk).name,
-                   control_strategy, LikelihoodLevel(residual_likelihood).name,
-                   RiskLevel(residual_risk).name, degree, comment]
-
-        if args["hide_initial_causes"]:
-            return columns[1:]
+        if iso_standard == "27001":
+            columns = [initial, root, intermediate, self.misbehaviour.comment,
+                    impact, likelihood, risk, control_strategy,
+                    residual_likelihood, residual_risk, degree, comment]
+            if args["hide_initial_causes"]:
+                return columns[1:]
+        elif iso_standard == "14971":
+            columns = [root, self.misbehaviour.comment, ImpactLevel(impact).name,
+                    LikelihoodLevel(likelihood).name, RiskLevel(risk).name,
+                    control_strategy, LikelihoodLevel(residual_likelihood).name,
+                    RiskLevel(residual_risk).name, degree, comment]
         else:
-            return columns
+            raise ValueError(f"unexpected ISO standard: {iso_standard}")
+
+        return columns
 
 class LikelihoodLevel(IntEnum):
     NEGLIGIBLE = 0
