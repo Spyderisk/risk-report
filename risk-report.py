@@ -58,7 +58,7 @@ parser = argparse.ArgumentParser(description="Generate risk reports for Spyderis
                                  epilog="e.g. risk-report.py -i SteelMill.nq.gz -o steel.pdf -iso 27001 -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60")
 parser.add_argument("-i", "--input", dest="input", required=True, metavar="NQ_filename|Model_URI", help="Filename of the validated system model NQ file (compressed or not) or the Spyderisk model webkey URI")
 parser.add_argument("-o", "--output", dest="output", required=True, metavar="output_csv_filename", help="Output CSV filename")
-parser.add_argument("-iso","--iso", dest="iso", required=True, metavar="ISO_standard", help="Select ISO standard (27001 or 14971)")
+parser.add_argument("-iso","--iso", dest="iso", required=True, choices=['27001', '14971'], metavar="ISO_standard", help="Select ISO standard (27001 or 14971)")
 parser.add_argument("-d", "--domain", dest="csvs", required=True, metavar="CSV_directory", help="Directory containing the domain model CSV files")
 parser.add_argument("-m", "--misbehaviour", dest="misbehaviours", required=False, nargs="+", metavar="URI_fragment", help="Target misbehaviour IDs, e.g. 'MS-LossOfControl-f8b49f60'. If not specified then the high impact and high risk ones will be analysed.")
 parser.add_argument("-s", "--simple-root-causes", dest="simple_root_causes", action="store_true", help="Keep the root causes simple (no top-level OR). Using this means more repetition.")
