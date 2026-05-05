@@ -35,8 +35,7 @@ tool will remove these automatically, if present.
 ### Help page
 
 ```
-usage: risk-report.py [-h] -i NQ_filename|Model_URI -o output_csv_filename -d
-                      CSV_directory [-m URI_fragment [URI_fragment ...]] [-s]
+usage: risk-report.py [-h] -i NQ_filename|Model_URI -o output_csv_filename -iso ISO_standard -d CSV_directory [-m URI_fragment [URI_fragment ...]] [-s]
                       [--hide-initial-causes] [--version]
 
 Generate risk reports for Spyderisk system models
@@ -44,25 +43,22 @@ Generate risk reports for Spyderisk system models
 options:
   -h, --help            show this help message and exit
   -i NQ_filename|Model_URI, --input NQ_filename|Model_URI
-                        Filename of the validated system model NQ file
-                        (compressed or not) or the Spyderisk webkey model URI
+                        Filename of the validated system model NQ file (compressed or not) or the Spyderisk model webkey URI
   -o output_csv_filename, --output output_csv_filename
                         Output CSV filename
+  -iso ISO_standard, --iso ISO_standard
+                        Select ISO standard (27001 or 14971)
   -d CSV_directory, --domain CSV_directory
                         Directory containing the domain model CSV files
   -m URI_fragment [URI_fragment ...], --misbehaviour URI_fragment [URI_fragment ...]
-                        Target misbehaviour IDs, e.g. 'MS-
-                        LossOfControl-f8b49f60'. If not specified then the
-                        high impact and high risk ones will be analysed.
+                        Target misbehaviour IDs, e.g. 'MS-LossOfControl-f8b49f60'. If not specified then the high impact and high risk ones will be analysed.
   -s, --simple-root-causes
-                        Keep the root causes simple (no top-level OR). Using
-                        this means more repetition.
+                        Keep the root causes simple (no top-level OR). Using this means more repetition.
   --hide-initial-causes
                         Don't output the initial causes
   --version             show program's version number and exit
-```
 
-e.g. risk-report.py -i system_model.nq.gz -o report.csv -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60
+e.g. risk-report.py -i SteelMill.nq.gz -o steel.pdf -iso 27001 -d ../domain-network/csv/ -m MS-LossOfControl-f8b49f60
 
 
 ## Examples running reporting through Makefile
@@ -82,13 +78,13 @@ make help
 Use a local system model NQ as the input file:
 
 ```
-make report ARGS="-i 'example b132-e5cfa54.nq.gz' -o test2.csv -d domain-network-132-e5cfa54/csv"
+make report ARGS="-i 'example b132-e5cfa54.nq.gz' -o test2.csv -iso 14971 -d domain-network-132-e5cfa54/csv"
 ```
 
 Use the URI of system model directly as the input:
 
 ```
-make report ARGS="-i 'https://nemecys2.it-innovation.soton.ac.uk/system-modeller/models/2ag...' -o test2.csv -d domain-network-132-e5cfa54/csv"
+make report ARGS="-i 'https://nemecys2.it-innovation.soton.ac.uk/system-modeller/models/2ag...' -o test2.csv -iso 14971 -d domain-network-132-e5cfa54/csv"
 ```
 
 
