@@ -126,6 +126,8 @@ domain_likelihood_levels_filename = Path(csv_directory) / "Likelihood.csv"
 domain_impact_levels_filename = Path(csv_directory) / "ImpactLevel.csv"
 domain_risk_levels_filename = Path(csv_directory) / "RiskLevel.csv"
 domain_risk_lookup_filename = Path(csv_directory) / "RiskLookupTable.csv"
+domain_compliance_sets_filename = Path(csv_directory) / "ComplianceSet.csv"
+domain_compliance_set_threats_filename = Path(csv_directory) / "ComplianceSetThreats.csv"
 
 # Constants to query RDF:
 CORE = "http://it-innovation.soton.ac.uk/ontologies/trustworthiness/core"
@@ -305,6 +307,46 @@ def load_risk_lookup(filename):
             else:
                 risk[iv][lv] = rv
     return risk
+
+def load_domain_compliance_sets(filename):
+    """Load compliance sets from the domain model"""
+    compliance_sets = {}
+    with open(filename, newline="") as csvfile:
+        reader = csv.reader(csvfile)
+        header = next(reader)
+        uri_index = header.index("URI")
+        label_index = header.index("label")
+        comment_index = header.index("comment")
+        for row in reader:
+            if DUMMY_URI in row: continue
+            uri = row[uri_index]
+            compliance_sets[uri] = {}
+            compliance_sets[uri]["URI"] = uri
+            compliance_sets[uri]["label"] = row[label_index]
+            compliance_sets[uri]["comment"] = row[comment_index]
+    return compliance_sets
+
+def load_domain_compliance_set_threats(filename):
+    """Load compliance set threats from the domain model"""
+    compliance_set_threats = {}
+    with open(filename, newline="") as csvfile:
+        reader = csv.reader(csvfile)
+        header = next(reader)
+        uri_index = header.index("URI")
+        domain_threat_index = header.index("requiresTreatmentOf")
+
+        for row in reader:
+            if DUMMY_URI in row: continue
+            uri = row[uri_index]
+
+            # Initialise threats list for this compliance threat URI, if necessary
+            if uri not in compliance_set_threats:
+                compliance_set_threats[uri] = set()
+        
+            domain_threat_uri = row[domain_threat_index]
+            compliance_set_threats[uri].add(domain_threat_uri)
+
+    return compliance_set_threats
 
 def un_camel_case(text):
     text = text.strip()
@@ -682,14 +724,36 @@ class TrustworthinessAttributeSet(Entity):
         """Return Boolean describing whether this is a TWAS which has the Default TW attribute"""
         return (self.uriref, HAS_TWA, DEFAULT_TW_ATTRIBUTE) in self.graph
 
+""" May not be requiered
+class ComplianceSet(Entity):
+    #Represents a Compliance Set.
+    def __init__(self, uriref, graph):
+        super().__init__(uriref, graph)
+
+    def __str__(self):
+        return "Compliance Set: {} ({}) / Effectiveness: {} / Max Likelihood: {}".format(
+            self.description, str(self.uriref), str(self.effectiveness_number), str(self.maximum_likelihood))
+"""
 class Threat(Entity):
     """Represents a Threat."""
     def __init__(self, uri_ref, graph):
         super().__init__(uri_ref, graph)
         self.cached_explanations = []
 
+    def __repr__(self):
+        return str(self)
+
     def __str__(self):
         return "Threat: {} ({})".format(self.short_comment, str(self.uriref))
+    
+    def _parent(self):
+        return self.graph.value(self.uriref, PARENT).split("/")[-1]
+    
+    def _causes_misbehaviour(self):
+        uriref = self.graph.value(self.uriref, CAUSES_MISBEHAVIOUR)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
 
     def _likelihood_uri(self):
         uriref = self.graph.value(self.uriref, HAS_PRIOR)
@@ -1663,6 +1727,25 @@ class ControlStrategyReport():
 
         return columns
 
+class ComplianceReport():
+    """Represents a Compliance Report."""
+    def __init__(self, compliance_set, system_compliance_threat):
+        # the domain model Compliance Set
+        self.compliance_set = compliance_set
+        # the system model Compliance Threat
+        self.compliance_threat = system_compliance_threat
+
+    @classmethod
+    def cvs_header(cls):
+        columns = ["Compliance Set", "Compliance Set Comment", "Compliance Threat"]
+        
+        return columns
+
+    def csv_row(self):
+        columns = [self.compliance_set['label'], self.compliance_set['comment'], self.compliance_threat.comment]
+
+        return columns
+
 class LikelihoodLevel(IntEnum):
     NEGLIGIBLE = 0
     VERYLOW = 1
@@ -1762,12 +1845,19 @@ dm_risk_levels = load_domain_levels(domain_risk_levels_filename)
 logging.info("Loading risk lookup table...")
 dm_risk_lookup = load_risk_lookup(domain_risk_lookup_filename)
 
+logging.info("Loading domain model compliance sets...")
+dm_compliance_sets = load_domain_compliance_sets(domain_compliance_sets_filename)
+
+logging.info("Loading domain model compliance set threats...")
+dm_compliance_set_threats = load_domain_compliance_set_threats(domain_compliance_set_threats_filename)
+
 logging.info("Loading nq file...")
 timer = Timer()
 system_model = Graph(nq_filename)
 timer.log()
 
 
+"""
 target_ms = set()
 
 if target_ms_uris:
@@ -1822,3 +1912,47 @@ with open(output_filename, 'w', newline='') as file:
 #     logging.debug(str(ms))
 #     for explanation in ms.likelihood_explanations:
 #         logging.debug("    " + str(explanation))
+"""
+
+# Get compliance threats, i.e those that have no misbehaviours
+compliance_threats_by_parent = {}
+for threat in system_model.threats:
+    if threat._causes_misbehaviour() is None:
+        parent = threat._parent()
+        if parent not in compliance_threats_by_parent.keys():
+            compliance_threats_by_parent[parent] = set()
+        compliance_threats_by_parent[parent].add(threat)
+
+system_compliance_threats = {}
+all_compliance_reports = []
+
+for compliance_set_key in dm_compliance_set_threats.keys():
+    # Filter out modelling errors
+    if compliance_set_key == "domain#Anomalies":
+        continue
+
+    compliance_set_threat_uris = dm_compliance_set_threats[compliance_set_key]
+
+    system_compliance_threats[compliance_set_key] = set()
+    for compliance_threat_uri in compliance_set_threat_uris:
+        if compliance_threat_uri in compliance_threats_by_parent:
+            compliance_threats = compliance_threats_by_parent[compliance_threat_uri]
+            system_compliance_threats[compliance_set_key] |= compliance_threats
+
+with open(output_filename, 'w', newline='') as file:
+    writer = csv.writer(file)
+    # Write the header
+    writer.writerow(ComplianceReport.cvs_header())
+
+    # Write each row
+    logging.info("Writing compliance report to output CSV file...")
+    for compliance_set_key in dm_compliance_set_threats.keys():
+        # Filter out modelling errors
+        if compliance_set_key == "domain#Anomalies":
+            continue
+        compliance_set = dm_compliance_sets[compliance_set_key]
+
+        for system_compliance_threat in system_compliance_threats[compliance_set_key]:
+            compliance_report = ComplianceReport(compliance_set, system_compliance_threat)
+            writer.writerow(compliance_report.csv_row())
+
