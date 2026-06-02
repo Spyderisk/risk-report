@@ -567,8 +567,8 @@ class ControlStrategy(Entity):
         super().__init__(uriref, graph)
 
     def __str__(self):
-        return "Control Strategy: {} ({}) / Effectiveness: {} / Max Likelihood: {}".format(
-            self.description, str(self.uriref), str(self.effectiveness_number), str(self.maximum_likelihood))
+        return "Control Strategy: {} ({}) / Effectiveness: {} / Max Likelihood: {} / Active: {}".format(
+            self.description, str(self.uriref), str(self.effectiveness_number), str(self.maximum_likelihood), str(self.is_active))
 
     @property
     def description(self):
@@ -1729,20 +1729,24 @@ class ControlStrategyReport():
 
 class ComplianceReport():
     """Represents a Compliance Report."""
-    def __init__(self, compliance_set, system_compliance_threat):
+    def __init__(self, compliance_set, compliance_set_compliant, system_compliance_threat, compliance_threat_compliant):
         # the domain model Compliance Set
         self.compliance_set = compliance_set
+        # flag to indicate if the compliance set is compliant
+        self.compliance_set_compliant = compliance_set_compliant
         # the system model Compliance Threat
         self.compliance_threat = system_compliance_threat
+        # flag to indicate if the compliance threat is compliant
+        self.compliance_threat_compliant = compliance_threat_compliant
 
     @classmethod
     def cvs_header(cls):
-        columns = ["Compliance Set", "Compliance Set Comment", "Compliance Threat"]
+        columns = ["Compliance Set", "Compliance Set Comment", "Compliant", "Compliance Threat", "Compliant"]
         
         return columns
 
     def csv_row(self):
-        columns = [self.compliance_set['label'], self.compliance_set['comment'], self.compliance_threat.comment]
+        columns = [self.compliance_set['label'], self.compliance_set['comment'], self.compliance_set_compliant, self.compliance_threat.comment, self.compliance_threat_compliant]
 
         return columns
 
@@ -1944,15 +1948,52 @@ with open(output_filename, 'w', newline='') as file:
     # Write the header
     writer.writerow(ComplianceReport.cvs_header())
 
-    # Write each row
-    logging.info("Writing compliance report to output CSV file...")
+    # Map of whether compliance sets are compliant
+    compliance_sets_compliant = {}
+
+    # Map of whether compliance threats are compliant
+    compliance_threats_compliant = {}
+
+    # Loop through compliance cets
     for compliance_set_key in dm_compliance_set_threats.keys():
         # Filter out modelling errors
         if compliance_set_key == "domain#Anomalies":
             continue
+
+        logging.info(compliance_set_key)
         compliance_set = dm_compliance_sets[compliance_set_key]
 
+        # Mark compliance set initially to be compliant
+        compliance_set_compliant = True
+
         for system_compliance_threat in system_compliance_threats[compliance_set_key]:
-            compliance_report = ComplianceReport(compliance_set, system_compliance_threat)
+            compliance_threat_is_compliant = False
+
+            logging.info(system_compliance_threat)
+            control_strategies = system_compliance_threat.control_strategies
+
+            for control_strategy in control_strategies:
+                logging.info(control_strategy)
+                if control_strategy.is_active:
+                    compliance_threat_is_compliant = True
+
+            compliance_threats_compliant[system_compliance_threat.uriref] = compliance_threat_is_compliant
+            
+            logging.info(f"Compliant: {compliance_threat_is_compliant}")
+            if not compliance_threat_is_compliant:
+                compliance_set_compliant = False
+
+            logging.info("")
+
+        logging.info(f"{compliance_set_key} compliant: {compliance_set_compliant}")
+        compliance_sets_compliant[compliance_set_key] = compliance_set_compliant
+
+        # Write each row
+        logging.info("Writing compliance report to output CSV file...")
+        for system_compliance_threat in system_compliance_threats[compliance_set_key]:
+            compliance_threat_compliant = compliance_threats_compliant[system_compliance_threat.uriref]
+
+            compliance_report = ComplianceReport(compliance_set, compliance_set_compliant, system_compliance_threat, compliance_threat_compliant)
             writer.writerow(compliance_report.csv_row())
+
 
