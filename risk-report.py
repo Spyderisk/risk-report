@@ -162,6 +162,9 @@ HAS_FREQUENCY = URIRef(CORE + "#hasFrequency")
 MISBEHAVIOUR_SET = URIRef(CORE + "#MisbehaviourSet")
 MITIGATES = URIRef(CORE + "#mitigates")
 BLOCKS = URIRef(CORE + "#blocks")
+TRIGGERS = URIRef(CORE + "#triggers")
+IS_TRIGGERED = URIRef(CORE + "#isTriggered")
+TRIGGERED_BY = URIRef(CORE + "#triggeredBy")
 HAS_CONTROL_SET = URIRef(CORE + "#hasControlSet")
 HAS_MANDATORY_CONTROL_SET = URIRef(CORE + "#hasMandatoryCS")
 CONTROL_SET = URIRef(CORE + "#ControlSet")
@@ -744,7 +747,7 @@ class Threat(Entity):
         return str(self)
 
     def __str__(self):
-        return "Threat: {} ({})".format(self.short_comment, str(self.uriref))
+        return "Threat: {} ({}), Triggerable: {}".format(self.short_comment, str(self.uriref), self.is_triggered)
     
     def _parent(self):
         return self.graph.value(self.uriref, PARENT).split("/")[-1]
@@ -869,6 +872,10 @@ class Threat(Entity):
         return (self.uriref, IS_INITIAL_CAUSE, Literal(True)) in self.graph
 
     @property
+    def is_triggered(self):
+        return (self.uriref, IS_TRIGGERED, Literal(True)) in self.graph
+
+    @property
     def trustworthiness_attribute_sets(self):
         return [self.graph.trustworthiness_attribute_set(uriref) for uriref in self.graph.objects(self.uriref, HAS_ENTRY_POINT)]
 
@@ -931,6 +938,18 @@ class Threat(Entity):
                 csg = self.graph.control_strategy(csg_uri)
                 if csg.is_current_risk_csg and not csg.has_inactive_contingency_plan:
                     csgs.append(csg)
+        return csgs
+
+    @property
+    def triggering_control_strategies(self):
+        """Return list of control strategy objects that trigger this threat"""
+        csgs = []
+
+        for csg_uri in self.graph.subjects(TRIGGERS, self.uriref):
+            logging.info(str(csg_uri))
+            csg = self.graph.control_strategy(csg_uri)
+            csgs.append(csg)
+
         return csgs
 
     def is_root_cause_disregarding_likelihood(self, is_normal_effect):
@@ -1928,6 +1947,7 @@ for threat in system_model.threats:
         compliance_threats_by_parent[parent].add(threat)
 
 system_compliance_threats = {}
+filtered_system_compliance_threats = {}
 all_compliance_reports = []
 
 for compliance_set_key in dm_compliance_set_threats.keys():
@@ -1966,10 +1986,35 @@ with open(output_filename, 'w', newline='') as file:
         # Mark compliance set initially to be compliant
         compliance_set_compliant = True
 
+        # Initialise set of compliance threats that are NOT triggered
+        filtered_system_compliance_threats[compliance_set_key] = set()
+
         for system_compliance_threat in system_compliance_threats[compliance_set_key]:
             compliance_threat_is_compliant = False
 
             logging.info(system_compliance_threat)
+
+            # Check if threat is triggerable, then check if triggered by a CSG. If not, filter out this threat
+            if system_compliance_threat.is_triggered:
+                triggering_csgs = system_compliance_threat.triggering_control_strategies
+                triggered = False
+                for triggering_csg in triggering_csgs:
+                    if triggering_csg.is_active:
+                        logging.info(f"Triggering CSG active: {triggering_csg}")
+                        triggered = True
+                    else:
+                        logging.info(f"Triggering CSG not active: {triggering_csg}")
+
+                if triggered:
+                    logging.info("Adding trigerred threat to compliance set")
+                else:
+                    logging.info("Filtering out this threat (triggerable but not triggered)")
+                    logging.info("")
+                    continue
+
+            # If we have arrived here then we can include the compliance threat
+            filtered_system_compliance_threats[compliance_set_key].add(system_compliance_threat)
+
             control_strategies = system_compliance_threat.control_strategies
 
             for control_strategy in control_strategies:
@@ -1990,7 +2035,7 @@ with open(output_filename, 'w', newline='') as file:
 
         # Write each row
         logging.info("Writing compliance report to output CSV file...")
-        for system_compliance_threat in system_compliance_threats[compliance_set_key]:
+        for system_compliance_threat in filtered_system_compliance_threats[compliance_set_key]:
             compliance_threat_compliant = compliance_threats_compliant[system_compliance_threat.uriref]
 
             compliance_report = ComplianceReport(compliance_set, compliance_set_compliant, system_compliance_threat, compliance_threat_compliant)
