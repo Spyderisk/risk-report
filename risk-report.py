@@ -1748,7 +1748,7 @@ class ControlStrategyReport():
 
 class ComplianceReport():
     """Represents a Compliance Report."""
-    def __init__(self, compliance_set, compliance_set_compliant, system_compliance_threat, compliance_threat_compliant):
+    def __init__(self, compliance_set, compliance_set_compliant, system_compliance_threat, compliance_threat_compliant, control_strategy):
         # the domain model Compliance Set
         self.compliance_set = compliance_set
         # flag to indicate if the compliance set is compliant
@@ -1757,15 +1757,17 @@ class ComplianceReport():
         self.compliance_threat = system_compliance_threat
         # flag to indicate if the compliance threat is compliant
         self.compliance_threat_compliant = compliance_threat_compliant
+        # Individual Control Strategy for this threat
+        self.control_strategy = control_strategy
 
     @classmethod
     def cvs_header(cls):
-        columns = ["Compliance Set", "Compliance Set Comment", "Compliant", "Compliance Threat", "Compliant"]
+        columns = ["Compliance Set", "Compliance Set Comment", "Compliant", "Compliance Threat", "Compliant", "Control Strategy", "Active"]
         
         return columns
 
     def csv_row(self):
-        columns = [self.compliance_set['label'], self.compliance_set['comment'], self.compliance_set_compliant, self.compliance_threat.comment, self.compliance_threat_compliant]
+        columns = [self.compliance_set['label'], self.compliance_set['comment'], self.compliance_set_compliant, self.compliance_threat.comment, self.compliance_threat_compliant, self.control_strategy.description, self.control_strategy.is_active]
 
         return columns
 
@@ -2037,8 +2039,10 @@ with open(output_filename, 'w', newline='') as file:
         logging.info("Writing compliance report to output CSV file...")
         for system_compliance_threat in filtered_system_compliance_threats[compliance_set_key]:
             compliance_threat_compliant = compliance_threats_compliant[system_compliance_threat.uriref]
+            control_strategies = system_compliance_threat.control_strategies
 
-            compliance_report = ComplianceReport(compliance_set, compliance_set_compliant, system_compliance_threat, compliance_threat_compliant)
-            writer.writerow(compliance_report.csv_row())
+            for control_strategy in control_strategies:
+                compliance_report = ComplianceReport(compliance_set, compliance_set_compliant, system_compliance_threat, compliance_threat_compliant, control_strategy)
+                writer.writerow(compliance_report.csv_row())
 
 
