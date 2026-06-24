@@ -2041,6 +2041,9 @@ with open(output_filename, 'w', newline='') as file:
             compliance_threat_compliant = compliance_threats_compliant[system_compliance_threat.uriref]
             control_strategies = system_compliance_threat.control_strategies
 
+            if not compliance_set_compliant:
+                logging.info("Compliance set is not compliant - not listing control strategies")
+
             for control_strategy in control_strategies:
                 compliance_report = ComplianceReport(compliance_set, compliance_set_compliant, system_compliance_threat, compliance_threat_compliant, control_strategy)
                 writer.writerow(compliance_report.csv_row())
