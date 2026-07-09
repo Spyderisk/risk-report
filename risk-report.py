@@ -126,6 +126,8 @@ domain_likelihood_levels_filename = Path(csv_directory) / "Likelihood.csv"
 domain_impact_levels_filename = Path(csv_directory) / "ImpactLevel.csv"
 domain_risk_levels_filename = Path(csv_directory) / "RiskLevel.csv"
 domain_risk_lookup_filename = Path(csv_directory) / "RiskLookupTable.csv"
+domain_compliance_sets_filename = Path(csv_directory) / "ComplianceSet.csv"
+domain_compliance_set_threats_filename = Path(csv_directory) / "ComplianceSetThreats.csv"
 
 # Constants to query RDF:
 CORE = "http://it-innovation.soton.ac.uk/ontologies/trustworthiness/core"
@@ -160,6 +162,9 @@ HAS_FREQUENCY = URIRef(CORE + "#hasFrequency")
 MISBEHAVIOUR_SET = URIRef(CORE + "#MisbehaviourSet")
 MITIGATES = URIRef(CORE + "#mitigates")
 BLOCKS = URIRef(CORE + "#blocks")
+TRIGGERS = URIRef(CORE + "#triggers")
+IS_TRIGGERED = URIRef(CORE + "#isTriggered")
+TRIGGERED_BY = URIRef(CORE + "#triggeredBy")
 HAS_CONTROL_SET = URIRef(CORE + "#hasControlSet")
 HAS_MANDATORY_CONTROL_SET = URIRef(CORE + "#hasMandatoryCS")
 CONTROL_SET = URIRef(CORE + "#ControlSet")
@@ -305,6 +310,46 @@ def load_risk_lookup(filename):
             else:
                 risk[iv][lv] = rv
     return risk
+
+def load_domain_compliance_sets(filename):
+    """Load compliance sets from the domain model"""
+    compliance_sets = {}
+    with open(filename, newline="") as csvfile:
+        reader = csv.reader(csvfile)
+        header = next(reader)
+        uri_index = header.index("URI")
+        label_index = header.index("label")
+        comment_index = header.index("comment")
+        for row in reader:
+            if DUMMY_URI in row: continue
+            uri = row[uri_index]
+            compliance_sets[uri] = {}
+            compliance_sets[uri]["URI"] = uri
+            compliance_sets[uri]["label"] = row[label_index]
+            compliance_sets[uri]["comment"] = row[comment_index]
+    return compliance_sets
+
+def load_domain_compliance_set_threats(filename):
+    """Load compliance set threats from the domain model"""
+    compliance_set_threats = {}
+    with open(filename, newline="") as csvfile:
+        reader = csv.reader(csvfile)
+        header = next(reader)
+        uri_index = header.index("URI")
+        domain_threat_index = header.index("requiresTreatmentOf")
+
+        for row in reader:
+            if DUMMY_URI in row: continue
+            uri = row[uri_index]
+
+            # Initialise threats list for this compliance threat URI, if necessary
+            if uri not in compliance_set_threats:
+                compliance_set_threats[uri] = set()
+        
+            domain_threat_uri = row[domain_threat_index]
+            compliance_set_threats[uri].add(domain_threat_uri)
+
+    return compliance_set_threats
 
 def un_camel_case(text):
     text = text.strip()
@@ -525,8 +570,8 @@ class ControlStrategy(Entity):
         super().__init__(uriref, graph)
 
     def __str__(self):
-        return "Control Strategy: {} ({}) / Effectiveness: {} / Max Likelihood: {}".format(
-            self.description, str(self.uriref), str(self.effectiveness_number), str(self.maximum_likelihood))
+        return "Control Strategy: {} ({}) / Effectiveness: {} / Max Likelihood: {} / Active: {}".format(
+            self.description, str(self.uriref), str(self.effectiveness_number), str(self.maximum_likelihood), str(self.is_active))
 
     @property
     def description(self):
@@ -682,14 +727,36 @@ class TrustworthinessAttributeSet(Entity):
         """Return Boolean describing whether this is a TWAS which has the Default TW attribute"""
         return (self.uriref, HAS_TWA, DEFAULT_TW_ATTRIBUTE) in self.graph
 
+""" May not be requiered
+class ComplianceSet(Entity):
+    #Represents a Compliance Set.
+    def __init__(self, uriref, graph):
+        super().__init__(uriref, graph)
+
+    def __str__(self):
+        return "Compliance Set: {} ({}) / Effectiveness: {} / Max Likelihood: {}".format(
+            self.description, str(self.uriref), str(self.effectiveness_number), str(self.maximum_likelihood))
+"""
 class Threat(Entity):
     """Represents a Threat."""
     def __init__(self, uri_ref, graph):
         super().__init__(uri_ref, graph)
         self.cached_explanations = []
 
+    def __repr__(self):
+        return str(self)
+
     def __str__(self):
-        return "Threat: {} ({})".format(self.short_comment, str(self.uriref))
+        return "Threat: {} ({}), Triggerable: {}".format(self.short_comment, str(self.uriref), self.is_triggered)
+    
+    def _parent(self):
+        return self.graph.value(self.uriref, PARENT).split("/")[-1]
+    
+    def _causes_misbehaviour(self):
+        uriref = self.graph.value(self.uriref, CAUSES_MISBEHAVIOUR)
+        if uriref is None:
+            return None
+        return uriref.split('/')[-1]
 
     def _likelihood_uri(self):
         uriref = self.graph.value(self.uriref, HAS_PRIOR)
@@ -805,6 +872,10 @@ class Threat(Entity):
         return (self.uriref, IS_INITIAL_CAUSE, Literal(True)) in self.graph
 
     @property
+    def is_triggered(self):
+        return (self.uriref, IS_TRIGGERED, Literal(True)) in self.graph
+
+    @property
     def trustworthiness_attribute_sets(self):
         return [self.graph.trustworthiness_attribute_set(uriref) for uriref in self.graph.objects(self.uriref, HAS_ENTRY_POINT)]
 
@@ -867,6 +938,18 @@ class Threat(Entity):
                 csg = self.graph.control_strategy(csg_uri)
                 if csg.is_current_risk_csg and not csg.has_inactive_contingency_plan:
                     csgs.append(csg)
+        return csgs
+
+    @property
+    def triggering_control_strategies(self):
+        """Return list of control strategy objects that trigger this threat"""
+        csgs = []
+
+        for csg_uri in self.graph.subjects(TRIGGERS, self.uriref):
+            logging.info(str(csg_uri))
+            csg = self.graph.control_strategy(csg_uri)
+            csgs.append(csg)
+
         return csgs
 
     def is_root_cause_disregarding_likelihood(self, is_normal_effect):
@@ -1663,6 +1746,31 @@ class ControlStrategyReport():
 
         return columns
 
+class ComplianceReport():
+    """Represents a Compliance Report."""
+    def __init__(self, compliance_set, compliance_set_compliant, system_compliance_threat, compliance_threat_compliant, control_strategy):
+        # the domain model Compliance Set
+        self.compliance_set = compliance_set
+        # flag to indicate if the compliance set is compliant
+        self.compliance_set_compliant = compliance_set_compliant
+        # the system model Compliance Threat
+        self.compliance_threat = system_compliance_threat
+        # flag to indicate if the compliance threat is compliant
+        self.compliance_threat_compliant = compliance_threat_compliant
+        # Individual Control Strategy for this threat
+        self.control_strategy = control_strategy
+
+    @classmethod
+    def cvs_header(cls):
+        columns = ["Compliance Set", "Compliance Set Comment", "Compliant", "Compliance Threat", "Compliant", "Control Strategy", "Active"]
+        
+        return columns
+
+    def csv_row(self):
+        columns = [self.compliance_set['label'], self.compliance_set['comment'], self.compliance_set_compliant, self.compliance_threat.comment, self.compliance_threat_compliant, self.control_strategy.description, self.control_strategy.is_active]
+
+        return columns
+
 class LikelihoodLevel(IntEnum):
     NEGLIGIBLE = 0
     VERYLOW = 1
@@ -1762,12 +1870,19 @@ dm_risk_levels = load_domain_levels(domain_risk_levels_filename)
 logging.info("Loading risk lookup table...")
 dm_risk_lookup = load_risk_lookup(domain_risk_lookup_filename)
 
+logging.info("Loading domain model compliance sets...")
+dm_compliance_sets = load_domain_compliance_sets(domain_compliance_sets_filename)
+
+logging.info("Loading domain model compliance set threats...")
+dm_compliance_set_threats = load_domain_compliance_set_threats(domain_compliance_set_threats_filename)
+
 logging.info("Loading nq file...")
 timer = Timer()
 system_model = Graph(nq_filename)
 timer.log()
 
 
+"""
 target_ms = set()
 
 if target_ms_uris:
@@ -1822,3 +1937,115 @@ with open(output_filename, 'w', newline='') as file:
 #     logging.debug(str(ms))
 #     for explanation in ms.likelihood_explanations:
 #         logging.debug("    " + str(explanation))
+"""
+
+# Get compliance threats, i.e those that have no misbehaviours
+compliance_threats_by_parent = {}
+for threat in system_model.threats:
+    if threat._causes_misbehaviour() is None:
+        parent = threat._parent()
+        if parent not in compliance_threats_by_parent.keys():
+            compliance_threats_by_parent[parent] = set()
+        compliance_threats_by_parent[parent].add(threat)
+
+system_compliance_threats = {}
+filtered_system_compliance_threats = {}
+all_compliance_reports = []
+
+for compliance_set_key in dm_compliance_set_threats.keys():
+    # Filter out modelling errors
+    if compliance_set_key == "domain#Anomalies":
+        continue
+
+    compliance_set_threat_uris = dm_compliance_set_threats[compliance_set_key]
+
+    system_compliance_threats[compliance_set_key] = set()
+    for compliance_threat_uri in compliance_set_threat_uris:
+        if compliance_threat_uri in compliance_threats_by_parent:
+            compliance_threats = compliance_threats_by_parent[compliance_threat_uri]
+            system_compliance_threats[compliance_set_key] |= compliance_threats
+
+with open(output_filename, 'w', newline='') as file:
+    writer = csv.writer(file)
+    # Write the header
+    writer.writerow(ComplianceReport.cvs_header())
+
+    # Map of whether compliance sets are compliant
+    compliance_sets_compliant = {}
+
+    # Map of whether compliance threats are compliant
+    compliance_threats_compliant = {}
+
+    # Loop through compliance cets
+    for compliance_set_key in dm_compliance_set_threats.keys():
+        # Filter out modelling errors
+        if compliance_set_key == "domain#Anomalies":
+            continue
+
+        logging.info(compliance_set_key)
+        compliance_set = dm_compliance_sets[compliance_set_key]
+
+        # Mark compliance set initially to be compliant
+        compliance_set_compliant = True
+
+        # Initialise set of compliance threats that are NOT triggered
+        filtered_system_compliance_threats[compliance_set_key] = set()
+
+        for system_compliance_threat in system_compliance_threats[compliance_set_key]:
+            compliance_threat_is_compliant = False
+
+            logging.info(system_compliance_threat)
+
+            # Check if threat is triggerable, then check if triggered by a CSG. If not, filter out this threat
+            if system_compliance_threat.is_triggered:
+                triggering_csgs = system_compliance_threat.triggering_control_strategies
+                triggered = False
+                for triggering_csg in triggering_csgs:
+                    if triggering_csg.is_active:
+                        logging.info(f"Triggering CSG active: {triggering_csg}")
+                        triggered = True
+                    else:
+                        logging.info(f"Triggering CSG not active: {triggering_csg}")
+
+                if triggered:
+                    logging.info("Adding trigerred threat to compliance set")
+                else:
+                    logging.info("Filtering out this threat (triggerable but not triggered)")
+                    logging.info("")
+                    continue
+
+            # If we have arrived here then we can include the compliance threat
+            filtered_system_compliance_threats[compliance_set_key].add(system_compliance_threat)
+
+            control_strategies = system_compliance_threat.control_strategies
+
+            for control_strategy in control_strategies:
+                logging.info(control_strategy)
+                if control_strategy.is_active:
+                    compliance_threat_is_compliant = True
+
+            compliance_threats_compliant[system_compliance_threat.uriref] = compliance_threat_is_compliant
+            
+            logging.info(f"Compliant: {compliance_threat_is_compliant}")
+            if not compliance_threat_is_compliant:
+                compliance_set_compliant = False
+
+            logging.info("")
+
+        logging.info(f"{compliance_set_key} compliant: {compliance_set_compliant}")
+        compliance_sets_compliant[compliance_set_key] = compliance_set_compliant
+
+        # Write each row
+        logging.info("Writing compliance report to output CSV file...")
+        for system_compliance_threat in filtered_system_compliance_threats[compliance_set_key]:
+            compliance_threat_compliant = compliance_threats_compliant[system_compliance_threat.uriref]
+            control_strategies = system_compliance_threat.control_strategies
+
+            if not compliance_set_compliant:
+                logging.info("Compliance set is not compliant - not listing control strategies")
+
+            for control_strategy in control_strategies:
+                compliance_report = ComplianceReport(compliance_set, compliance_set_compliant, system_compliance_threat, compliance_threat_compliant, control_strategy)
+                writer.writerow(compliance_report.csv_row())
+
+
