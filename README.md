@@ -9,6 +9,28 @@ The tool is implemented in Python and can be executed directly from
 the command line, provided that the required libraries (listed in
 requirements.txt) are installed.
 
+## DS2 combined reporting layout
+
+The `ds2-sdm` branch packages the two existing reporting implementations for
+use by the System Modeller adaptor:
+
+```text
+security/risk-report.py
+compliance/risk-report.py
+domain-current/csv
+```
+
+`security/risk-report.py` is the security implementation from `main`.
+`compliance/risk-report.py` is the compliance implementation from
+`8-compliance-report`. The adaptor selects one script or runs both scripts for
+a combined PDF; this repository does not combine their distinct CSV schemas.
+
+`domain-current/csv` is the reporting source exported from domain-network
+branch `246-need-a-data-sovereignty-package` at commit `dc721b4`. It matches
+the `domain-network-DevMS-b246-filtered.zip` knowledgebase used by the DS2
+System Modeller deployment. Update the knowledgebase ZIP and this CSV folder
+together when moving to another domain-model release.
+
 For convenience, we provice a Makefile which automatically manages a python virtual environment, 
 installs the necessary dependencies, then generates the risk report.
 

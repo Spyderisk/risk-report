@@ -1,3 +1,8 @@
 *.csv
 log
 *.pdf
+__pycache__/
+*.pyc
+domain-current-before-*/
+domain-network/
+domain-network-*/
