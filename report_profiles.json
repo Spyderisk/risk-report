@@ -1,0 +1,47 @@
+{
+  "default_profile": "default",
+  "profiles": {
+    "default": {
+      "security": {
+        "27001": {
+          "columns": [
+            { "index": 0, "header": "Initial Cause" },
+            { "index": 1, "header": "Root Cause" },
+            { "index": 2, "header": "Intermediate Cause" },
+            { "index": 3, "header": "Consequence" },
+            { "index": 4, "header": "Impact" },
+            { "index": 5, "header": "Likelihood" },
+            { "index": 6, "header": "Risk" },
+            { "index": 7, "header": "Control" },
+            { "index": 8, "header": "Residual Likelihood" },
+            { "index": 9, "header": "Residual Risk" },
+            { "index": 10, "header": "Degree" },
+            { "index": 11, "header": "Comment" }
+          ]
+        },
+        "14971": {
+          "columns": [
+            { "index": 0, "header": "Hazardous Situation" },
+            { "index": 1, "header": "Harm" },
+            { "index": 2, "header": "Severity" },
+            { "index": 3, "header": "Probability" },
+            { "index": 4, "header": "Risk" },
+            { "index": 5, "header": "Measures" },
+            { "index": 6, "header": "Residual Probability" },
+            { "index": 7, "header": "Residual Risk" },
+            { "index": 8, "header": "Measures Usefulness" },
+            { "index": 9, "header": "Measures Effectiveness" }
+          ]
+        }
+      },
+      "compliance": {
+        "columns": [
+          { "index": 3, "header": "Compliance Threat" },
+          { "index": 4, "header": "Compliant" },
+          { "index": 5, "header": "Control Strategy" },
+          { "index": 6, "header": "Active" }
+        ]
+      }
+    }
+  }
+}

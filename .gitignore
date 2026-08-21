@@ -3,6 +3,7 @@ log
 *.pdf
 __pycache__/
 *.pyc
+.tmp-tests/
 domain-current-before-*/
 domain-network/
 domain-network-*/

@@ -31,6 +31,20 @@ the `domain-network-DevMS-b246-filtered.zip` knowledgebase used by the DS2
 System Modeller deployment. Update the knowledgebase ZIP and this CSV folder
 together when moving to another domain-model release.
 
+### PDF presentation profile
+
+The reporting algorithms continue to generate their complete canonical CSV
+outputs. PDF generation applies the single profile selected by
+`default_profile` in `report_profiles.json`. Each configured column records its
+CSV position and expected header, so PDF generation fails explicitly if the
+algorithm schema and presentation profile no longer agree. The configuration
+supports additional named profiles for future use, but the REST interface and
+GUI currently use only the configured default.
+
+`report_pdf.py` and `report_profile.py` are part of this standalone reporting
+module. The System Modeller adaptor invokes them but does not own the PDF
+column-selection rules.
+
 For convenience, we provice a Makefile which automatically manages a python virtual environment, 
 installs the necessary dependencies, then generates the risk report.
 
